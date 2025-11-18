@@ -42,6 +42,13 @@ def init_db() -> None:
         FOREIGN KEY(user_id) REFERENCES users(id)
     );
     """)
+    #New Execute App Meta 11/18/25
+    cur.execute("""
+    CREATE TABLE IF NOT EXISTS app_meta (
+        key   TEXT PRIMARY KEY,
+        value TEXT
+    );
+    """)
     # Files (uploads)
     cur.execute("""
     CREATE TABLE IF NOT EXISTS files (
@@ -106,4 +113,32 @@ def add_file_record(user_id: int, filename: str, saved_path: str) -> None:
         "INSERT INTO files(user_id, filename, saved_path) VALUES (?,?,?)",
         (user_id, filename, saved_path),
     )
+    conn.commit()
+#New App Meta - 11/18/25
+def get_meta(key: str) -> Optional[str]:
+    conn = get_conn()
+    cur = conn.cursor()
+    cur.execute("SELECT value FROM app_meta WHERE key=?", (key,))
+    row = cur.fetchone()
+    return row["value"] if row else None
+
+def set_meta(key: str, value: str) -> None:
+    conn = get_conn()
+    cur = conn.cursor()
+    cur.execute("""
+        INSERT INTO app_meta(key, value) VALUES(?,?)
+        ON CONFLICT(key) DO UPDATE SET value=excluded.value
+    """, (key, value))
+    conn.commit()
+#New Users - 11/18/25
+def get_user_by_id(user_id: int) -> Optional[sqlite3.Row]:
+    conn = get_conn()
+    cur = conn.cursor()
+    cur.execute("SELECT * FROM users WHERE id = ?", (user_id,))
+    return cur.fetchone()
+
+def update_user_password(user_id: int, new_hash: str) -> None:
+    conn = get_conn()
+    cur = conn.cursor()
+    cur.execute("UPDATE users SET password_hash = ? WHERE id = ?", (new_hash, user_id))
     conn.commit()

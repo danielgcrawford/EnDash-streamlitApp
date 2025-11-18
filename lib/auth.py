@@ -43,3 +43,15 @@ def require_login():
     if "user" not in st.session_state:
         st.warning("Please log in first.")
         st.stop()
+
+#Update Admin Password - 11/18/25
+def change_password(user_id: int, current_plaintext: str, new_plaintext: str) -> bool:
+    """Verify current password, then set a new one. Returns True if changed."""
+    row = db.get_user_by_id(user_id)
+    if not row:
+        return False
+    if not verify_password(current_plaintext, row["password_hash"]):
+        return False
+    new_hash = hash_password(new_plaintext)
+    db.update_user_password(user_id, new_hash)
+    return True
