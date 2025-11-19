@@ -29,19 +29,33 @@ def init_db() -> None:
         created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
     );
     """)
-    # Settings (one row per user)
+    #Updated settings table 11/19
+    # Settings (one row per user) 
+    # NOTE: Older versions of the app may have created this table without
+    # target_low / target_high, so we also run a small migration below.
     cur.execute("""
     CREATE TABLE IF NOT EXISTS settings (
         id INTEGER PRIMARY KEY AUTOINCREMENT,
         user_id INTEGER UNIQUE NOT NULL,
-        unit_pref TEXT DEFAULT 'metric',      -- 'metric' | 'imperial'
-        temp_unit TEXT DEFAULT 'C',           -- 'C' | 'F'
-        temp_setpoint REAL DEFAULT 24.0,
-        rh_setpoint REAL DEFAULT 70.0,
-        vpd_setpoint REAL DEFAULT 0.8,
+        temp_unit TEXT DEFAULT 'F',           -- 'C' | 'F'
+        target_low REAL DEFAULT 65.0,         -- new: low threshold
+        target_high REAL DEFAULT 80.0,        -- new: high threshold
         FOREIGN KEY(user_id) REFERENCES users(id)
     );
     """)
+
+    #New Settings storage 11/19/25
+    # --- Lightweight migration for existing databases ---
+    # If the table already existed without target_low / target_high, add them.
+    cur.execute("PRAGMA table_info(settings);")
+    existing_cols = [row["name"] for row in cur.fetchall()]
+
+    if "target_low" not in existing_cols:
+        cur.execute("ALTER TABLE settings ADD COLUMN target_low REAL DEFAULT 65.0;")
+    if "target_high" not in existing_cols:
+        cur.execute("ALTER TABLE settings ADD COLUMN target_high REAL DEFAULT 80.0;")
+    if "temp_unit" not in existing_cols:
+        cur.execute("ALTER TABLE settings ADD COLUMN temp_unit TEXT DEFAULT 'F';")
     #New Execute App Meta 11/18/25
     cur.execute("""
     CREATE TABLE IF NOT EXISTS app_meta (
@@ -89,15 +103,21 @@ def get_or_create_settings(user_id: int) -> sqlite3.Row:
     cur.execute("SELECT * FROM settings WHERE user_id = ?", (user_id,))
     return cur.fetchone()
 
-def update_settings(user_id: int, unit_pref: str, temp_unit: str,
-                    temp_setpoint: float, rh_setpoint: float, vpd_setpoint: float) -> None:
+#Updated 11/19/25 new settings page
+def update_settings(user_id: int, temp_unit: str,
+                    target_low: float, target_high: float) -> None:
+    """Update per-user temperature settings.
+
+    Called by the Settings page with:
+        db.update_settings(user["id"], selected_unit, low_input, high_input)
+    """
     conn = get_conn()
     cur = conn.cursor()
     cur.execute("""
         UPDATE settings
-        SET unit_pref=?, temp_unit=?, temp_setpoint=?, rh_setpoint=?, vpd_setpoint=?
-        WHERE user_id=?
-    """, (unit_pref, temp_unit, temp_setpoint, rh_setpoint, vpd_setpoint, user_id))
+        SET temp_unit = ?, target_low = ?, target_high = ?
+        WHERE user_id = ?
+    """, (temp_unit, target_low, target_high, user_id))
     conn.commit()
 
 def list_user_files(user_id: int):
