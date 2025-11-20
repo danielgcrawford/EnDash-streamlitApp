@@ -6,6 +6,7 @@ import numpy as np
 import matplotlib.pyplot as plt
 
 from matplotlib.backends.backend_pdf import PdfPages
+import matplotlib.dates as mdates
 from io import BytesIO
 from pathlib import Path
 
@@ -235,10 +236,21 @@ figs_for_pdf = []
 if numeric_cols:
     fig_summary, ax_summary = plt.subplots(figsize=(8.5, 4.5))
     ax_summary.axis("off")
-    ax_summary.set_title("Summary statistics", fontsize=12, pad=12)
+
+    # Build a two-line title: main header + time range sentence
+    title_text = "Summary statistics"
+    if "start_time" in locals() and "end_time" in locals():
+        t_text = (
+            f"Data from {start_time.strftime('%Y-%m-%d %H:%M:%S')} "
+            f"to {end_time.strftime('%Y-%m-%d %H:%M:%S')}"
+        )
+        if interval_td is not None:
+            t_text += f" | Interval: {format_timedelta(interval_td)}"
+        title_text = f"{title_text}\n{t_text}"
+
+    ax_summary.set_title(title_text, fontsize=10, pad=20)
 
     # Convert the summary table to a figure table
-    # We use the original summary (with pretty labels as index) again
     tbl = ax_summary.table(
         cellText=summary.round(3).values,
         rowLabels=summary.index,
@@ -249,25 +261,6 @@ if numeric_cols:
     tbl.set_fontsize(8)
     tbl.scale(1.0, 1.2)
 
-    # Add time range text at the top if available
-    if "start_time" in locals() and "end_time" in locals():
-        text_y = 1.05
-        t_text = (
-            f"Data from {start_time.strftime('%Y-%m-%d %H:%M:%S')} "
-            f"to {end_time.strftime('%Y-%m-%d %H:%M:%S')}"
-        )
-        if interval_td is not None:
-            t_text += f" | Interval: {format_timedelta(interval_td)}"
-        ax_summary.text(
-            0.5,
-            text_y,
-            t_text,
-            ha="center",
-            va="bottom",
-            transform=ax_summary.transAxes,
-            fontsize=9,
-        )
-
     figs_for_pdf.append(fig_summary)
 
 # One plot per numeric column vs Time
@@ -275,13 +268,44 @@ for col in numeric_cols:
     fig, ax = plt.subplots(figsize=(8, 3))
 
     ax.plot(x_values, df_display[col], label=pretty_label(col))
-    ax.set_xlabel("Time" if use_time_axis else "Index")
 
+    # ----- X-axis formatting -----
+    if use_time_axis:
+        ax.set_xlabel("Time")
+
+        time_min = x_values.min()
+        time_max = x_values.max()
+        total_seconds = (time_max - time_min).total_seconds()
+
+        # Choose locator/formatter based on total time span
+        if total_seconds <= 6 * 3600:  # ≤ 6 hours
+            locator = mdates.MinuteLocator(interval=10)
+            formatter = mdates.DateFormatter("%H:%M")
+        elif total_seconds <= 24 * 3600:  # ≤ 1 day
+            locator = mdates.HourLocator(interval=2)
+            formatter = mdates.DateFormatter("%H:%M")
+        elif total_seconds <= 7 * 24 * 3600:  # ≤ 1 week
+            locator = mdates.DayLocator(interval=1)
+            formatter = mdates.DateFormatter("%m-%d")
+        else:  # longer spans – let matplotlib choose nice ticks
+            locator = mdates.AutoDateLocator()
+            formatter = mdates.AutoDateFormatter(locator)
+
+        ax.xaxis.set_major_locator(locator)
+        ax.xaxis.set_major_formatter(formatter)
+
+        # Rotate and align labels for readability (applies to both dashboard & PDF)
+        fig.autofmt_xdate(rotation=30, ha="right")
+    else:
+        ax.set_xlabel("Index")
+        # Limit number of x-ticks if using index
+        ax.xaxis.set_major_locator(plt.MaxNLocator(8))
+
+    # ----- Y-axis & other styling -----
     y_label = pretty_label(col)
     ax.set_ylabel(y_label)
     ax.set_title(y_label)
 
-    # Add target setpoints for air & leaf temperature
     if col in ["AirTemp", "LeafTemp"]:
         ax.axhline(
             target_low,
