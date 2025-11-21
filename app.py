@@ -20,15 +20,15 @@ with st.sidebar:
     else:
         st.caption("Not signed in")
 
-st.title("Welcome")
-st.write("This is a minimal starter to prove out login, per-user settings, and uploads.")
+st.title("Welcome to EnDash")
+st.write("EnDash is an automated climate dashboard with the goal of allowing rapid and standardized analysis of your greenhouse data.")
 
 user = auth.current_user()
 if user:
     st.success("You're signed in. Use the sidebar pages to continue:")
     st.markdown("- **Upload**: upload a CSV (private to your account)")
     st.markdown("- **Settings**: set your preferences")
-    st.markdown("- **Dashboard**: view a simple summary")
+    st.markdown("- **Dashboard**: view your data summary")
 else:
     st.subheader("Sign in")
     with st.form("login_form", clear_on_submit=False):
@@ -44,4 +44,4 @@ else:
             st.error("Invalid username or password.")
 
 st.divider()
-st.caption("Admin credentials are read from `.streamlit/secrets.toml` (local) or app secrets in deployment. Change them immediately.")
+st.caption("Courtesy of the Fisher Lab - IFAS, University of Florida")

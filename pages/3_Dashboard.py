@@ -203,7 +203,7 @@ st.divider()
 
 # ----------------- Summary table (min / mean / max) -----------------
 
-st.subheader("Summary statistics (cleaned data + calculated columns)")
+st.subheader("Summary Statistics")
 
 numeric_cols = df_display.select_dtypes(include="number").columns.tolist()
 if numeric_cols:
