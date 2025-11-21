@@ -63,3 +63,63 @@ if submit_user:
             st.success(f"User '{uname}' created (id={new_id}).")
         except sqlite3.IntegrityError:
             st.error("Username already exists.")
+
+st.divider()
+st.subheader("Existing Users")
+
+rows = db.list_users()
+if rows:
+    st.table(
+        {
+            "ID": [r["id"] for r in rows],
+            "Username": [r["username"] for r in rows],
+            "Admin?": [bool(r["is_admin"]) for r in rows],
+            "Created at": [r["created_at"] for r in rows],
+        }
+    )
+else:
+    st.info("No users found.")
+
+
+st.divider()
+st.subheader("Existing users")
+
+users = db.list_users()
+
+if not users:
+    st.info("No users found.")
+else:
+    for row in users:
+        user_id = row["id"]
+        username = row["username"]
+        is_admin = bool(row["is_admin"])
+        created_at = row["created_at"]
+
+        with st.expander(
+            f"{username}  |  "
+            f"{'Admin' if is_admin else 'User'}  |  "
+            f"Created: {created_at}",
+            expanded=False,
+        ):
+            new_pw = st.text_input(
+                "New password",
+                type="password",
+                key=f"new_pw_{user_id}",
+            )
+            confirm_pw = st.text_input(
+                "Confirm new password",
+                type="password",
+                key=f"confirm_pw_{user_id}",
+            )
+
+            if st.button("Update password", key=f"update_pw_{user_id}"):
+                if not new_pw or not confirm_pw:
+                    st.error("Both password fields are required.")
+                elif new_pw != confirm_pw:
+                    st.error("Passwords do not match.")
+                elif len(new_pw) < 8:
+                    st.error("Password must be at least 8 characters.")
+                else:
+                    new_hash = auth.hash_password(new_pw)
+                    db.update_user_password(user_id, new_hash)
+                    st.success(f"Password updated for {username}.")

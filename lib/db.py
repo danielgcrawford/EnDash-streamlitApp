@@ -162,3 +162,14 @@ def update_user_password(user_id: int, new_hash: str) -> None:
     cur = conn.cursor()
     cur.execute("UPDATE users SET password_hash = ? WHERE id = ?", (new_hash, user_id))
     conn.commit()
+
+def list_users():
+    """Return basic info for all users."""
+    conn = get_conn()
+    cur = conn.cursor()
+    cur.execute("""
+        SELECT id, username, is_admin, created_at
+        FROM users
+        ORDER BY id
+    """)
+    return cur.fetchall()
