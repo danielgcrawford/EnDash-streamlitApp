@@ -1,7 +1,7 @@
 # pages/0_Admin.py
 #New Admin Page creaated - 11/18/25
 import streamlit as st
-import sqlite3
+from psycopg2 import errors
 from lib import auth, db
 
 st.set_page_config(page_title="Admin", page_icon="🔒", layout="centered")
@@ -61,8 +61,10 @@ if submit_user:
             pwd_hash = auth.hash_password(pw)
             new_id = db.add_user(uname, pwd_hash, 1 if make_admin else 0)
             st.success(f"User '{uname}' created (id={new_id}).")
-        except sqlite3.IntegrityError:
+        except errors.UniqueViolation:
             st.error("Username already exists.")
+        except Exception as e:
+            st.error("Error creating user. Please try again.")
 
 st.divider()
 st.subheader("Existing Users")
