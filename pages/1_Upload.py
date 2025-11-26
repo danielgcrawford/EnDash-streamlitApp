@@ -16,6 +16,7 @@ def normalize(s: str) -> str:
     s = re.sub(r"[^a-z0-9_]", "", s)  # "RHT-Temperature" -> "rhttemperature"
     return s
 
+
 # Canonicals + specific aliases
 ALIASES = {
     "Time": [
@@ -119,6 +120,7 @@ def build_clean_dataframe(df_raw: pd.DataFrame, mapping: dict) -> pd.DataFrame:
     """
     Create a clean DataFrame containing only mapped canonical columns,
     in a consistent order (CANON_ORDER).
+    mapping should be {raw_col -> canonical_name}.
     """
     # Map each canonical to the first raw column that was mapped to it
     canon_to_raw = {}
@@ -175,16 +177,19 @@ if uploaded is not None:
     user_dir = Path("data") / "uploads" / str(user["id"])
     user_dir.mkdir(parents=True, exist_ok=True)
 
-    ts = int(time.time())
+    # Per-user upload state so we don't keep re-saving the same raw file
+    state_key = f"upload_state_{user['id']}"
+    state = st.session_state.setdefault(state_key, {})
 
-    # Save raw/original file exactly as uploaded
-    raw_path = user_dir / f"{ts}_{original_name}"
-    with open(raw_path, "wb") as f:
-        f.write(uploaded.getbuffer())
-
-    # Clean file name for the processed CSV
-    clean_filename = f"{ts}_{Path(original_name).stem}_clean.csv"
-    clean_path = user_dir / clean_filename
+    # Save raw/original file exactly as uploaded (once per file name)
+    if state.get("uploaded_name") != original_name:
+        ts = int(time.time())
+        raw_path = user_dir / f"{ts}_{original_name}"
+        with open(raw_path, "wb") as f:
+            f.write(uploaded.getbuffer())
+        state["uploaded_name"] = original_name
+        state["raw_path"] = str(raw_path)
+    raw_path = Path(state["raw_path"])
 
     try:
         # --- Load raw file ---
@@ -195,64 +200,140 @@ if uploaded is not None:
         else:
             st.caption(f"Read CSV using encoding: `{encoding_used}`")
 
-        # --- Build mapping & clean DF ---
-        alias_table = build_alias_table()
-        raw_cols = [str(c) for c in df_raw.columns]
-        mapping, missing, extras = map_columns(raw_cols, alias_table)
-
-        df_clean = build_clean_dataframe(df_raw, mapping)
-
-        # --- Save cleaned file as CSV ---
-        df_clean.to_csv(clean_path, index=False)
-
-        # Record *clean* file in DB so the Dashboard uses mapped data
-        db.add_file_record(user["id"], original_name, str(clean_path))
-        st.success(
-            f"Uploaded `{original_name}` and created cleaned file `{clean_filename}`."
-        )
-
-        # --- Show previews ---
-        st.subheader("Original file preview")
+        # --- Step 1: Original preview ---
+        st.subheader("Step 1: Original file preview")
         st.caption("First 10 rows from the uploaded file (raw).")
         st.dataframe(df_raw.head(10), use_container_width=True)
 
-        st.subheader("Cleaned & mapped file preview")
-        if df_clean.empty:
-            st.warning(
-                "No columns could be mapped to canonical names. "
-                "Check that your column headers match expected aliases."
-            )
-        else:
-            st.caption("First 10 rows from the cleaned CSV (mapped canonical columns).")
-            st.dataframe(df_clean.head(10), use_container_width=True)
+        # --- Prepare automatic mapping suggestions ---
+        alias_table = build_alias_table()
+        raw_cols = [str(c) for c in df_raw.columns]
+        auto_mapping, auto_missing, auto_extras = map_columns(raw_cols, alias_table)
 
-            # Download cleaned CSV
-            st.download_button(
-                label="⬇️ Download cleaned CSV",
-                data=df_clean.to_csv(index=False).encode("utf-8"),
-                file_name=clean_filename,
-                mime="text/csv",
-            )
+        # Invert auto_mapping to get default raw per canonical
+        auto_canon_to_raw = {}
+        for raw_col, canon in auto_mapping.items():
+            auto_canon_to_raw.setdefault(canon, raw_col)
 
-        # --- Mapping details ---
-        with st.expander("Column mapping details"):
-            st.write("**Raw → canonical mapping**")
-            if mapping:
-                mapping_df = pd.DataFrame(
-                    [(raw, canon) for raw, canon in mapping.items()],
-                    columns=["Raw column name", "Canonical column"]
+        # --- Step 2: Mapping editor ---
+        st.subheader("Step 2: Review and adjust column mapping")
+        st.markdown(
+            "Select which **raw column** should be used for each canonical field. "
+            "Defaults are based on automatic alias matching, but you can adjust them "
+            "if a column was mis-detected or has an unusual name."
+        )
+
+        with st.form("mapping_form"):
+            mapping_selections = {}
+            options_all = ["(None)"] + raw_cols
+
+            for canon in CANON_ORDER:
+                default_raw = auto_canon_to_raw.get(canon)
+                if default_raw in raw_cols:
+                    default_index = raw_cols.index(default_raw) + 1
+                else:
+                    default_index = 0
+
+                selection = st.selectbox(
+                    f"{canon} column",
+                    options_all,
+                    index=default_index,
+                    key=f"map_{canon}",
+                    help=f"Select which column from your file should be treated as `{canon}`."
                 )
-                st.table(mapping_df)
+                mapping_selections[canon] = selection
+
+            st.caption(
+                "Columns left as **(None)** will not appear in the cleaned file. "
+                "Each raw column should be mapped to at most one canonical name."
+            )
+            submitted = st.form_submit_button("✅ Accept mapping and generate cleaned file")
+
+        # --- Step 3: Generate & preview cleaned file after confirmation ---
+        if submitted:
+            # Build mapping {raw -> canon} from form selections
+            user_mapping = {}
+            used_raw = set()
+            duplicate_raws = set()
+
+            for canon in CANON_ORDER:
+                raw_sel = mapping_selections.get(canon)
+                if not raw_sel or raw_sel == "(None)":
+                    continue
+                if raw_sel in used_raw:
+                    duplicate_raws.add(raw_sel)
+                else:
+                    used_raw.add(raw_sel)
+                    user_mapping[raw_sel] = canon
+
+            if duplicate_raws:
+                st.error(
+                    "Each raw column can only be mapped to **one** canonical column.\n\n"
+                    "Duplicate selections: " + ", ".join(sorted(duplicate_raws))
+                )
+            elif not user_mapping:
+                st.warning(
+                    "No columns were mapped. Please select at least one column "
+                    "for a canonical field and try again."
+                )
             else:
-                st.caption("No known canonical columns were detected.")
+                df_clean = build_clean_dataframe(df_raw, user_mapping)
 
-            if missing:
-                st.write("**Canonical columns not found in your file:**")
-                st.write(", ".join(missing))
+                clean_ts = int(time.time())
+                clean_filename = f"{clean_ts}_{Path(original_name).stem}_clean.csv"
+                clean_path = user_dir / clean_filename
 
-            if extras:
-                st.write("**Unmapped columns in original file (not included in clean CSV):**")
-                st.write(", ".join(extras))
+                df_clean.to_csv(clean_path, index=False)
+
+                # Record *clean* file in DB so the Dashboard uses mapped data
+                db.add_file_record(user["id"], original_name, str(clean_path))
+
+                st.success(
+                    f"Cleaned file generated and saved as `{clean_filename}`. "
+                    "This file will appear in the Dashboard file selector."
+                )
+
+                st.subheader("Cleaned & mapped file preview")
+                if df_clean.empty:
+                    st.warning(
+                        "The cleaned file is empty after applying the selected mapping. "
+                        "Check that your chosen columns contain valid data."
+                    )
+                else:
+                    st.caption("First 10 rows from the cleaned CSV (canonical columns).")
+                    st.dataframe(df_clean.head(10), use_container_width=True)
+
+                    # Download cleaned CSV
+                    st.download_button(
+                        label="⬇️ Download cleaned CSV",
+                        data=df_clean.to_csv(index=False).encode("utf-8"),
+                        file_name=clean_filename,
+                        mime="text/csv",
+                    )
+
+                # Final mapping details
+                with st.expander("Final column mapping details", expanded=True):
+                    mapping_rows = [(raw, canon) for raw, canon in user_mapping.items()]
+                    mapping_df = pd.DataFrame(
+                        mapping_rows,
+                        columns=["Raw column name", "Canonical column"],
+                    )
+                    st.table(mapping_df)
+
+                    missing_manual = [
+                        canon for canon in CANON_ORDER
+                        if canon not in user_mapping.values()
+                    ]
+                    if missing_manual:
+                        st.write("**Canonical columns not included in cleaned file:**")
+                        st.write(", ".join(missing_manual))
+
+                    extras_manual = [
+                        c for c in raw_cols if c not in user_mapping
+                    ]
+                    if extras_manual:
+                        st.write("**Unmapped raw columns (remain only in original file):**")
+                        st.write(", ".join(extras_manual))
 
     except Exception as e:
         st.error(f"Could not read or process file: {e}")
@@ -266,3 +347,4 @@ if files:
         st.write(f"• {rec['filename']}  — uploaded {rec['uploaded_at']}")
 else:
     st.caption("No files yet.")
+
