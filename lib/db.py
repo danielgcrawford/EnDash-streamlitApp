@@ -1,12 +1,13 @@
 # lib/db.py - Postgres/Neon version
+
 from pathlib import Path
-from typing import Optional
+from typing import Optional, Dict, Any, List
 
 import streamlit as st
 import psycopg2
 import psycopg2.extras
 
-# Paths (still used for uploads etc.)
+# We still keep a local data directory for any temporary files if needed
 ROOT = Path(__file__).resolve().parents[1]
 DATA_DIR = ROOT / "data"
 DATA_DIR.mkdir(parents=True, exist_ok=True)
@@ -16,7 +17,7 @@ def get_conn():
     """
     Get a Postgres connection using the URL in st.secrets['database']['url'].
 
-    We use RealDictCursor so rows behave like sqlite3.Row (row['column']).
+    We use RealDictCursor so rows behave like dicts (row['column']).
     """
     db_url = st.secrets["database"]["url"]
     conn = psycopg2.connect(
@@ -67,14 +68,14 @@ def init_db() -> None:
         """
     )
 
-    # Files (uploads)
+    # Files (cleaned uploads stored directly in Neon)
     cur.execute(
         """
         CREATE TABLE IF NOT EXISTS files (
             id          SERIAL PRIMARY KEY,
             user_id     INTEGER NOT NULL REFERENCES users(id),
             filename    TEXT NOT NULL,
-            saved_path  TEXT NOT NULL,
+            content     BYTEA NOT NULL,
             uploaded_at TIMESTAMPTZ DEFAULT NOW()
         );
         """
@@ -83,6 +84,9 @@ def init_db() -> None:
     conn.commit()
     cur.close()
     conn.close()
+
+
+# -------- Users & settings --------
 
 
 def get_user_by_username(username: str):
@@ -153,11 +157,20 @@ def update_settings(user_id: int, temp_unit: str, target_low: float, target_high
     conn.close()
 
 
-def list_user_files(user_id: int):
+# -------- Files (cleaned CSVs in Neon) --------
+
+
+def list_user_files(user_id: int) -> List[Dict[str, Any]]:
+    """Return metadata for a user's uploaded cleaned files."""
     conn = get_conn()
     cur = conn.cursor()
     cur.execute(
-        "SELECT * FROM files WHERE user_id = %s ORDER BY uploaded_at DESC;",
+        """
+        SELECT id, user_id, filename, uploaded_at
+        FROM files
+        WHERE user_id = %s
+        ORDER BY uploaded_at DESC;
+        """,
         (user_id,),
     )
     rows = cur.fetchall()
@@ -166,19 +179,62 @@ def list_user_files(user_id: int):
     return rows
 
 
-def add_file_record(user_id: int, filename: str, saved_path: str) -> None:
+def add_file_record(user_id: int, filename: str, file_bytes: bytes) -> None:
+    """
+    Store the CLEANED CSV bytes in Neon.
+
+    The `files` table schema is:
+
+        id, user_id, filename, content (BYTEA), uploaded_at
+    """
     conn = get_conn()
     cur = conn.cursor()
     cur.execute(
         """
-        INSERT INTO files (user_id, filename, saved_path)
+        INSERT INTO files (user_id, filename, content)
         VALUES (%s, %s, %s);
         """,
-        (user_id, filename, saved_path),
+        (user_id, filename, psycopg2.Binary(file_bytes)),
     )
     conn.commit()
     cur.close()
     conn.close()
+
+
+def get_file_bytes(file_id: int) -> Optional[Dict[str, Any]]:
+    """
+    Fetch a cleaned CSV from Neon.
+
+    Returns {"filename": str, "bytes": bytes} or None.
+    Handles BYTEA / memoryview / TEXT just in case.
+    """
+    conn = get_conn()
+    cur = conn.cursor()
+    cur.execute(
+        "SELECT filename, content FROM files WHERE id = %s;",
+        (file_id,),
+    )
+    row = cur.fetchone()
+    cur.close()
+    conn.close()
+
+    if not row:
+        return None
+
+    content = row["content"]
+    if isinstance(content, memoryview):
+        content_bytes = content.tobytes()
+    elif isinstance(content, bytes):
+        content_bytes = content
+    elif isinstance(content, str):
+        content_bytes = content.encode("utf-8")
+    else:
+        raise TypeError(f"Unexpected type for files.content: {type(content)}")
+
+    return {"filename": row["filename"], "bytes": content_bytes}
+
+
+# -------- Meta & admin helpers --------
 
 
 def get_meta(key: str) -> Optional[str]:
@@ -228,7 +284,8 @@ def update_user_password(user_id: int, new_hash: str) -> None:
     cur.close()
     conn.close()
 
-def list_users():
+
+def list_users() -> List[Dict[str, Any]]:
     """Return basic info for all users."""
     conn = get_conn()
     cur = conn.cursor()

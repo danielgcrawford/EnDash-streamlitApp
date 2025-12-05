@@ -1,14 +1,15 @@
 # pages/3_Dashboard.py
 
-import streamlit as st
-import pandas as pd
-import numpy as np
-import matplotlib.pyplot as plt
-
-from matplotlib.backends.backend_pdf import PdfPages
-import matplotlib.dates as mdates
+import io
 from io import BytesIO
 from pathlib import Path
+
+import matplotlib.dates as mdates
+import matplotlib.pyplot as plt
+import numpy as np
+import pandas as pd
+import streamlit as st
+from matplotlib.backends.backend_pdf import PdfPages
 
 from lib import auth, db
 
@@ -20,7 +21,7 @@ user = auth.current_user()
 
 st.title("📊 Dashboard")
 
-# ----------------- File selection -----------------
+# ----------------- File selection (cleaned files from Neon) -----------------
 
 files = db.list_user_files(user["id"])
 if not files:
@@ -30,13 +31,31 @@ if not files:
 options = {f"{rec['filename']} ({rec['uploaded_at']})": rec for rec in files}
 label = st.selectbox("Select a cleaned data file", list(options.keys()))
 rec = options[label]
-path = Path(rec["saved_path"])
+
+file_id = rec["id"]
+file_obj = db.get_file_bytes(file_id)
+if file_obj is None:
+    st.error("Could not load file from database.")
+    st.stop()
+
+filename = file_obj["filename"]
+file_bytes = file_obj["bytes"]
 
 try:
-    df = pd.read_csv(path)
+    bio = io.BytesIO(file_bytes)
+    df = pd.read_csv(bio)
 except Exception as e:
-    st.error(f"Could not read cleaned CSV: {e}")
+    st.error(f"Could not read cleaned CSV from Neon: {e}")
     st.stop()
+
+# --- Quick preview to verify cleaned file structure ---
+st.subheader("Cleaned file preview")
+st.caption("First 10 rows from the cleaned CSV stored in Neon.")
+st.dataframe(df.head(10), use_container_width=True)
+
+cols_str = ", ".join(map(str, df.columns))
+st.caption(f"Detected columns: {cols_str}")
+st.divider()
 
 # Ensure Time column is datetime and sorted, if present
 if "Time" in df.columns:
@@ -53,6 +72,7 @@ target_low = float(settings.get("target_low", 65))
 target_high = float(settings.get("target_high", 80))
 
 # ----------------- Helper functions -----------------
+
 
 def to_celsius(series: pd.Series, orig_is_fahrenheit: bool) -> pd.Series:
     if series is None:
@@ -104,16 +124,17 @@ def pretty_label(col: str) -> str:
         return f"Air temperature ({temp_symbol})"
     if col == "LeafTemp":
         return f"Leaf temperature ({temp_symbol})"
-    if col == "LeafAirDiff":
-        return f"Leaf–air temperature difference ({temp_symbol})"
+    #if col == "LeafAirDiff":
+        #return f"Leaf–air temperature difference ({temp_symbol})"
     if col == "RH":
         return "Relative humidity (%)"
     if col == "PAR":
         return "PAR (µmol m⁻² s⁻¹)"
-    if col == "VPDair":
-        return "Air VPD (kPa)"
     if col == "VPDleaf":
         return "Leaf VPD (kPa)"
+    else:
+        if col == "VPDair":
+            return "Air VPD (kPa)"
     return col
 
 
@@ -144,7 +165,7 @@ else:
 air_c = to_celsius(air_raw, orig_is_f) if air_raw is not None else None
 leaf_c = to_celsius(leaf_raw, orig_is_f) if leaf_raw is not None else None
 
-# VPD calculations (always in Celsius / kPa)
+# VPD calculations
 vpd_air = None
 vpd_leaf = None
 leaf_air_diff_c = None
@@ -157,7 +178,7 @@ if air_c is not None and rh is not None:
 
     if leaf_c is not None:
         es_leaf = 0.61121 * np.exp((18.678 - leaf_c / 234.5) * (leaf_c / (257.14 + leaf_c)))
-        vpd_leaf = np.maximum(0, es_leaf - ea_air)  # ensure non-negative
+        vpd_leaf = np.maximum(0, es_leaf - ea_air)
         leaf_air_diff_c = leaf_c - air_c
 
 # Convert everything to user-selected display units
@@ -165,21 +186,20 @@ air_disp = to_display_temp(air_c, temp_unit) if air_c is not None else None
 leaf_disp = to_display_temp(leaf_c, temp_unit) if leaf_c is not None else None
 leaf_air_diff_disp = diff_to_display(leaf_air_diff_c, temp_unit) if leaf_air_diff_c is not None else None
 
-# Build display dataframe with original cleaned structure plus derived columns
+# Build display dataframe
 df_display = df.copy()
-
 if air_disp is not None:
     df_display["AirTemp"] = air_disp
 if leaf_disp is not None:
     df_display["LeafTemp"] = leaf_disp
-if leaf_air_diff_disp is not None:
-    df_display["LeafAirDiff"] = leaf_air_diff_disp
-if vpd_air is not None:
-    df_display["VPDair"] = vpd_air
+#if leaf_air_diff_disp is not None:
+#    df_display["LeafAirDiff"] = leaf_air_diff_disp
 if vpd_leaf is not None:
     df_display["VPDleaf"] = vpd_leaf
-
-# ----------------- Summary sentence (time range & interval) -----------------
+else:
+    if vpd_air is not None:
+        df_display["VPDair"] = vpd_air
+# ----------------- Summary sentence -----------------
 
 if "Time" in df_display.columns and df_display["Time"].notna().any():
     time_sorted = df_display["Time"].sort_values()
@@ -201,7 +221,7 @@ else:
 
 st.divider()
 
-# ----------------- Summary table (min / mean / max) -----------------
+# ----------------- Summary table -----------------
 
 st.subheader("Summary Statistics")
 
@@ -210,12 +230,11 @@ if numeric_cols:
     summary = df_display[numeric_cols].agg(["min", "mean", "max"]).transpose()
     summary.rename(columns={"min": "Min", "mean": "Average", "max": "Max"}, inplace=True)
 
-    # Add units & friendly labels via the index
     new_index = [pretty_label(c) for c in summary.index]
     summary.index = new_index
 
     st.dataframe(
-        summary.style.format("{:.3f}"),
+        summary.style.format("{:.1f}"),
         use_container_width=True,
     )
 else:
@@ -232,12 +251,11 @@ x_values = df_display["Time"] if use_time_axis else df_display.index
 
 figs_for_pdf = []
 
-# Create an invisible figure for the summary table + text in the PDF
+# Summary-table page in PDF
 if numeric_cols:
     fig_summary, ax_summary = plt.subplots(figsize=(8.5, 4.5))
     ax_summary.axis("off")
 
-    # Build a two-line title: main header + time range sentence
     title_text = "Summary statistics"
     if "start_time" in locals() and "end_time" in locals():
         t_text = (
@@ -250,9 +268,8 @@ if numeric_cols:
 
     ax_summary.set_title(title_text, fontsize=10, pad=20)
 
-    # Convert the summary table to a figure table
     tbl = ax_summary.table(
-        cellText=summary.round(3).values,
+        cellText=summary.round(1).values,
         rowLabels=summary.index,
         colLabels=summary.columns,
         loc="center",
@@ -263,13 +280,12 @@ if numeric_cols:
 
     figs_for_pdf.append(fig_summary)
 
-# One plot per numeric column vs Time
+# One plot per numeric column
 for col in numeric_cols:
     fig, ax = plt.subplots(figsize=(8, 3))
 
     ax.plot(x_values, df_display[col], label=pretty_label(col))
 
-    # ----- X-axis formatting -----
     if use_time_axis:
         ax.set_xlabel("Time")
 
@@ -277,7 +293,6 @@ for col in numeric_cols:
         time_max = x_values.max()
         total_seconds = (time_max - time_min).total_seconds()
 
-        # Choose locator/formatter based on total time span
         if total_seconds <= 6 * 3600:  # ≤ 6 hours
             locator = mdates.MinuteLocator(interval=10)
             formatter = mdates.DateFormatter("%H:%M")
@@ -287,21 +302,17 @@ for col in numeric_cols:
         elif total_seconds <= 7 * 24 * 3600:  # ≤ 1 week
             locator = mdates.DayLocator(interval=1)
             formatter = mdates.DateFormatter("%m-%d")
-        else:  # longer spans – let matplotlib choose nice ticks
+        else:
             locator = mdates.AutoDateLocator()
             formatter = mdates.AutoDateFormatter(locator)
 
         ax.xaxis.set_major_locator(locator)
         ax.xaxis.set_major_formatter(formatter)
-
-        # Rotate and align labels for readability (applies to both dashboard & PDF)
         fig.autofmt_xdate(rotation=30, ha="right")
     else:
         ax.set_xlabel("Index")
-        # Limit number of x-ticks if using index
         ax.xaxis.set_major_locator(plt.MaxNLocator(8))
 
-    # ----- Y-axis & other styling -----
     y_label = pretty_label(col)
     ax.set_ylabel(y_label)
     ax.set_title(y_label)
@@ -340,10 +351,9 @@ if figs_for_pdf:
     st.download_button(
         label="⬇️ Download dashboard report (PDF)",
         data=pdf_buffer,
-        file_name=f"dashboard_report_{Path(rec['filename']).stem}.pdf",
+        file_name=f"dashboard_report_{Path(filename).stem}.pdf",
         mime="application/pdf",
     )
 
-    # Clean up figures from memory
     for fig in figs_for_pdf:
         plt.close(fig)
