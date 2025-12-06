@@ -64,7 +64,7 @@ def render_sidebar():
         st.subheader("Navigation")
 
         # Main page shows as 'Login' instead of 'app'
-        st.page_link("app.py", label="Login")
+        st.page_link("app.py", label="Home")
 
         if user:
             # Admin tab only for admins
@@ -72,12 +72,12 @@ def render_sidebar():
                 st.page_link("pages/0_Admin.py", label="Admin")
 
             # Other pages for any logged-in user
-            st.page_link("pages/1_Upload.py", label="Upload")
-            st.page_link("pages/2_Settings.py", label="Settings")
-            st.page_link("pages/3_Dashboard.py", label="Dashboard")
+            st.page_link("pages/1_Upload.py", label="Upload Files")
+            st.page_link("pages/2_Settings.py", label="Settings & Setpoints")
+            st.page_link("pages/3_Dashboard.py", label="Dashboard Analysis")
             st.page_link("pages/4_Chatbot.py", label="Chatbot")
 
-            
+
 #Update Admin Password - 11/18/25
 def change_password(user_id: int, current_plaintext: str, new_plaintext: str) -> bool:
     """Verify current password, then set a new one. Returns True if changed."""

@@ -11,7 +11,7 @@ user = auth.current_user()
 auth.render_sidebar()
 
 if not user["is_admin"]:
-    st.error("Admins only.")
+    st.error("This page is for administrators only.")
     st.stop()
 
 st.title("🔒 Admin")

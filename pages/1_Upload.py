@@ -227,10 +227,10 @@ if uploaded is not None:
         for raw_col, canon in auto_mapping.items():
             auto_canon_to_raw.setdefault(canon, raw_col)
 
-        st.subheader("Step 2: Review and adjust column mapping")
+        st.subheader("Step 2: Review and adjust column names")
         st.markdown(
-            "Select which **raw column** should be used for each canonical field. "
-            "Defaults come from automatic alias matching; adjust if needed."
+            "Select which **data column** should be used for analyzing each parameter. "
+            "Defaults come from automatic matching; adjust if needed."
         )
 
         with st.form("mapping_form"):
@@ -252,7 +252,7 @@ if uploaded is not None:
                 )
                 mapping_selections[canon] = sel
 
-            submitted = st.form_submit_button("✅ Accept mapping and generate cleaned file")
+            submitted = st.form_submit_button("✅ Accept naming and generate dashboard report")
 
         if submitted:
             # Build mapping raw -> canon from user selections
@@ -272,7 +272,7 @@ if uploaded is not None:
 
             if duplicate_raws:
                 st.error(
-                    "Each raw column can only be mapped to **one** canonical column.\n\n"
+                    "Each raw column can only be mapped to **one** parameter column.\n\n"
                     "Duplicate selections: " + ", ".join(sorted(duplicate_raws))
                 )
                 st.stop()
@@ -280,7 +280,7 @@ if uploaded is not None:
             if not user_mapping:
                 st.warning(
                     "No columns were mapped. Please select at least one column "
-                    "for a canonical field and try again."
+                    "for a field and try again."
                 )
                 st.stop()
 
@@ -293,7 +293,7 @@ if uploaded is not None:
                 st.error(
                     "The cleaned file is missing required columns for the Dashboard: "
                     + ", ".join(missing_for_dashboard)
-                    + ". Please adjust your mapping and try again."
+                    + ". Please adjust your naming selections and try again."
                 )
                 st.stop()
 
@@ -320,7 +320,7 @@ if uploaded is not None:
             st.dataframe(df_clean.head(10), use_container_width=True)
 
             st.download_button(
-                label="⬇️ Download cleaned CSV",
+                label="⬇️ Optional: Download cleaned CSV",
                 data=cleaned_bytes,
                 file_name=f"{uname}_{data_start_str}_clean.csv",
                 mime="text/csv",

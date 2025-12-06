@@ -49,9 +49,9 @@ st.markdown(
 # ---------- DB init & admin bootstrap ----------
 db.init_db()
 auth.ensure_admin()
+auth.render_sidebar()
 
 # ---------- Helpers reused from Upload/Dashboard ----------
-
 
 def normalize(s: str) -> str:
     """Normalize a column name for matching."""
@@ -263,43 +263,10 @@ def pretty_label(col: str, temp_unit: str) -> str:
     return col
 
 
-# ---------- Sidebar: user status + custom navigation ----------
-with st.sidebar:
-    st.title("🌿 EnDash")
-
-    user = auth.current_user()
-
-    # --- User status / logout ---
-    if user:
-        st.caption(f"Signed in as **{user['username']}**")
-        if st.button("Log out"):
-            auth.logout()
-            st.rerun()
-    else:
-        st.caption("Not signed in")
-
-    st.divider()
-    st.subheader("Navigation")
-
-    # Always show the main page as "Login" instead of "app"
-    st.page_link("app.py", label="Login")
-
-    # Only show the rest of the pages once a user is logged in
-    if user:
-        # Admin page only for admin users
-        if user.get("is_admin"):
-            st.page_link("pages/0_Admin.py", label="Admin")
-
-        # These are visible to any logged-in user
-        st.page_link("pages/1_Upload.py", label="Upload")
-        st.page_link("pages/2_Settings.py", label="Settings")
-        st.page_link("pages/3_Dashboard.py", label="Dashboard")
-        st.page_link("pages/4_Chatbot.py", label="Chatbot")
 
 # ---------- Main content ----------
 
 user = auth.current_user()
-
 st.title("🌿 EnDash")
 
 st.divider()
@@ -317,10 +284,11 @@ if not user:
             st.success("Logged in.")
             st.rerun()
         else:
-            st.error("Invalid username or password.")
+            st.error("Invalid username or password. If you do not have an account, please email greenhouseprofessors@gmail.com.")
 
     st.divider()
-    st.caption("Courtesy of the Fisher Lab - IFAS, University of Florida")
+    st.caption("Email greenhouseprofessors@gmail.com to create an account.")
+    st.caption("Beta program for the Floriculture Research Alliance")
     st.stop()
 
 # ----- Logged-in view: Quick View Dashboard -----
