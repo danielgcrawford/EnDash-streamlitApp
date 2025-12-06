@@ -191,6 +191,7 @@ def username_slug(user) -> str:
 st.set_page_config(page_title="Upload", page_icon="📂", layout="wide")
 auth.require_login()
 user = auth.current_user()
+auth.render_sidebar()
 
 st.title("📂 Upload data file (.csv or .xlsx)")
 

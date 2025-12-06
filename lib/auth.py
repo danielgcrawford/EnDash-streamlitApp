@@ -44,6 +44,40 @@ def require_login():
         st.warning("Please log in first.")
         st.stop()
 
+def render_sidebar():
+    """Render the shared sidebar with nav on every page."""
+    with st.sidebar:
+        st.title("🌿 EnDash")
+
+        user = current_user()
+
+        # --- User status / logout ---
+        if user:
+            st.caption(f"Signed in as **{user['username']}**")
+            if st.button("Log out"):
+                logout()
+                st.rerun()
+        else:
+            st.caption("Not signed in")
+
+        st.divider()
+        st.subheader("Navigation")
+
+        # Main page shows as 'Login' instead of 'app'
+        st.page_link("app.py", label="Login")
+
+        if user:
+            # Admin tab only for admins
+            if user.get("is_admin"):
+                st.page_link("pages/0_Admin.py", label="Admin")
+
+            # Other pages for any logged-in user
+            st.page_link("pages/1_Upload.py", label="Upload")
+            st.page_link("pages/2_Settings.py", label="Settings")
+            st.page_link("pages/3_Dashboard.py", label="Dashboard")
+            st.page_link("pages/4_Chatbot.py", label="Chatbot")
+
+            
 #Update Admin Password - 11/18/25
 def change_password(user_id: int, current_plaintext: str, new_plaintext: str) -> bool:
     """Verify current password, then set a new one. Returns True if changed."""

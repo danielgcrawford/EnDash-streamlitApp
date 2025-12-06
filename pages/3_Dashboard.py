@@ -18,6 +18,7 @@ from lib import auth, db
 st.set_page_config(page_title="Dashboard", page_icon="📊", layout="wide")
 auth.require_login()
 user = auth.current_user()
+auth.render_sidebar()
 
 st.title("📊 Dashboard")
 

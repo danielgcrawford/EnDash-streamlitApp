@@ -8,6 +8,8 @@ st.set_page_config(page_title="Admin", page_icon="🔒", layout="centered")
 auth.require_login()
 user = auth.current_user()
 
+auth.render_sidebar()
+
 if not user["is_admin"]:
     st.error("Admins only.")
     st.stop()

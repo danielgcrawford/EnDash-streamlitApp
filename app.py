@@ -25,19 +25,20 @@ st.markdown(
     h1 {
         text-align: center;
         margin-top: 0rem; /*default is 1*/
-        margin-bottom 0rem;
+        margin-bottom: 0rem;
     }
 
     /* Center the text inside all Streamlit buttons */
     div.stButton > button {
         display: block;
-        margin: 0 auto;
+        margin-left: auto;
+        margin-right: auto;
         text-align: center;
     }
 
     /*Tighten vertical space around dividers (st.divider and '---')*/
     hr {
-        margin-top: 0rem
+        margin-top: 0rem;
         margin-bottom: 0rem;
     }
     </style>
@@ -262,10 +263,13 @@ def pretty_label(col: str, temp_unit: str) -> str:
     return col
 
 
-# ---------- Sidebar: user status + logout ----------
+# ---------- Sidebar: user status + custom navigation ----------
 with st.sidebar:
     st.title("🌿 EnDash")
+
     user = auth.current_user()
+
+    # --- User status / logout ---
     if user:
         st.caption(f"Signed in as **{user['username']}**")
         if st.button("Log out"):
@@ -274,6 +278,23 @@ with st.sidebar:
     else:
         st.caption("Not signed in")
 
+    st.divider()
+    st.subheader("Navigation")
+
+    # Always show the main page as "Login" instead of "app"
+    st.page_link("app.py", label="Login")
+
+    # Only show the rest of the pages once a user is logged in
+    if user:
+        # Admin page only for admin users
+        if user.get("is_admin"):
+            st.page_link("pages/0_Admin.py", label="Admin")
+
+        # These are visible to any logged-in user
+        st.page_link("pages/1_Upload.py", label="Upload")
+        st.page_link("pages/2_Settings.py", label="Settings")
+        st.page_link("pages/3_Dashboard.py", label="Dashboard")
+        st.page_link("pages/4_Chatbot.py", label="Chatbot")
 
 # ---------- Main content ----------
 
@@ -306,37 +327,32 @@ if not user:
 
 # Top-row navigation & actions
 if "quick_upload_open" not in st.session_state:
-    st.session_state.quick_upload_open = False
-st.session_state.quick_upload_open = not st.session_state.quick_upload_open
-top_col1, top_col2, top_col3 = st.columns(3)
+    # Default: show the Quick Upload panel
+    st.session_state.quick_upload_open = True
 
-with top_col1:
-    st.page_link(
-        "pages/1_Upload.py",
-        label="📂 Manual Upload",
-        use_container_width=True,
-    )    
+col1, col2, col3 = st.columns(3, gap="medium")
 
-with top_col2:
-    st.page_link(
-        "pages/2_Settings.py",
-        label="⚙️ Edit Settings & Setpoints",
-        use_container_width=True,
-    )
+with col1:
+    if st.button("📂 Manual Upload", use_container_width=True):
+        st.switch_page("pages/1_Upload.py")
 
-with top_col3:
-    st.page_link(
-        "pages/3_Dashboard.py",
-        label="📊 Full Dashboard",
-        use_container_width=True,
-    )
+with col2:
+    if st.button("⚙️ Edit Settings", use_container_width=True):
+        st.switch_page("pages/2_Settings.py")
+
+with col3:
+    if st.button("📊 Full Dashboard", use_container_width=True):
+        st.switch_page("pages/3_Dashboard.py")
+
 
 # ----- Quick Upload panel -----
 if st.session_state.quick_upload_open:
     st.markdown("### Quick Upload")
     st.caption(
-        "Drop a data file here to generate the Dashboard Summary of your environmental data. "
-        "To edit column selections and preview data, use the Upload page. Edit units and change your desired conditions in the Settings page. View past reports and further analysis on the Dashboard page."
+        "Drop a data file here to generate the Dashboard Summary of your "
+        "environmental data. To edit column selections and preview data, use "
+        "the Upload page. Edit units and change your desired conditions in the "
+        "Settings page. View past reports and further analysis on the Dashboard page."
     )
 
     quick_file = st.file_uploader(
@@ -345,72 +361,92 @@ if st.session_state.quick_upload_open:
         key="quick_upload_file",
     )
 
+    # Track the last file we successfully processed so we don't re-process it
+    if "last_quick_upload_file_id" not in st.session_state:
+        st.session_state.last_quick_upload_file_id = None
+
+    upload_succeeded = False
+
     if quick_file is not None:
-        original_name = quick_file.name
-        ext = Path(original_name).suffix or ".csv"
-        file_bytes_raw = quick_file.getvalue()
+        # Simple ID: (name, size). If this hasn't changed, we already handled it.
+        file_id = (quick_file.name, quick_file.size)
 
-        try:
-            # 1) Load raw table
-            df_raw, file_type, encoding_used = load_table_from_bytes(
-                file_bytes_raw, ext
-            )
+        if st.session_state.last_quick_upload_file_id == file_id:
+            # Same file as last time and already processed -> do nothing
+            pass
+        else:
+            original_name = quick_file.name
+            ext = Path(original_name).suffix or ".csv"
+            file_bytes_raw = quick_file.getvalue()
 
-            # 2) Automatic column mapping
-            alias_table = build_alias_table()
-            raw_cols = [str(c) for c in df_raw.columns]
-            auto_mapping, _, _ = map_columns(raw_cols, alias_table)
-
-            if not auto_mapping:
-                raise ValueError(
-                    "Could not automatically match any columns to Time/AirTemp/RH/PAR."
+            try:
+                # 1) Load raw table
+                df_raw, file_type, encoding_used = load_table_from_bytes(
+                    file_bytes_raw, ext
                 )
 
-            # 3) Build cleaned dataframe with canonical columns
-            df_clean = build_clean_dataframe(df_raw, auto_mapping)
+                # 2) Automatic column mapping
+                alias_table = build_alias_table()
+                raw_cols = [str(c) for c in df_raw.columns]
+                auto_mapping, _, _ = map_columns(raw_cols, alias_table)
 
-            required_for_dashboard = ["Time", "AirTemp", "RH"]
-            missing_for_dashboard = [
-                c for c in required_for_dashboard if c not in df_clean.columns
-            ]
-            if missing_for_dashboard:
-                raise ValueError(
-                    "Missing required columns for dashboard: "
-                    + ", ".join(missing_for_dashboard)
+                if not auto_mapping:
+                    raise ValueError(
+                        "Could not automatically match any columns to "
+                        "Time/AirTemp/RH/PAR."
+                    )
+
+                # 3) Build cleaned dataframe
+                df_clean = build_clean_dataframe(df_raw, auto_mapping)
+
+                required_for_dashboard = ["Time", "AirTemp", "RH"]
+                missing_for_dashboard = [
+                    c for c in required_for_dashboard if c not in df_clean.columns
+                ]
+                if missing_for_dashboard:
+                    raise ValueError(
+                        "Missing required columns for dashboard: "
+                        + ", ".join(missing_for_dashboard)
+                    )
+
+                # 4) Create stored filename based on data start time
+                if "Time" in df_clean.columns and not df_clean["Time"].isna().all():
+                    data_start = df_clean["Time"].min()
+                    data_start_str = data_start.strftime("%Y%m%dT%H%M")
+                else:
+                    data_start_str = time.strftime("%Y%m%dT%H%M", time.gmtime())
+
+                uname = username_slug(user)
+                stored_filename = f"{uname}_{data_start_str}.csv"
+
+                cleaned_bytes = df_clean.to_csv(index=False).encode("utf-8")
+                db.add_file_record(user["id"], stored_filename, cleaned_bytes)
+
+                st.success(
+                    f"Quick upload succeeded and cleaned file `{stored_filename}` "
+                    "was saved. The quick view dashboard has been updated."
                 )
 
-            # 4) Create stored filename based on data start time
-            if "Time" in df_clean.columns and not df_clean["Time"].isna().all():
-                data_start = df_clean["Time"].min()
-                data_start_str = data_start.strftime("%Y%m%dT%H%M")
-            else:
-                data_start_str = time.strftime("%Y%m%dT%H%M", time.gmtime())
+                # Mark this file as processed and close the panel
+                st.session_state.last_quick_upload_file_id = file_id
+                st.session_state.quick_upload_open = False
+                upload_succeeded = True
 
-            uname = username_slug(user)
-            stored_filename = f"{uname}_{data_start_str}.csv"
+            except Exception as e:
+                st.error(f"Quick upload could not automatically process this file: {e}")
+                st.warning(
+                    "Use the full Upload page to manually select columns and review "
+                    "the mapping for this dataset."
+                )
+                st.page_link(
+                    "pages/1_Upload.py",
+                    label="⚠️ Unable to Upload File – Open Upload Page",
+                )
 
-            cleaned_bytes = df_clean.to_csv(index=False).encode("utf-8")
-            db.add_file_record(user["id"], stored_filename, cleaned_bytes)
+    # Trigger a rerun only after a confirmed successful upload
+    if upload_succeeded:
+        st.rerun()
 
-            st.success(
-                f"Quick upload succeeded and cleaned file `{stored_filename}` "
-                "was saved. The quick view dashboard has been updated."
-            )
-
-            # Close panel and refresh so the new file becomes "latest"
-            st.session_state.quick_upload_open = False
-            st.rerun()
-
-        except Exception as e:
-            st.error(f"Quick upload could not automatically process this file: {e}")
-            st.warning(
-                "Use the full Upload page to manually select columns and review "
-                "the mapping for this dataset."
-            )
-            st.page_link(
-                "pages/1_Upload.py",
-                label="⚠️ Unable to Upload File – Open Upload Page",
-            )
 
 st.markdown("---")
 

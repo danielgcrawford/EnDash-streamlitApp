@@ -4,6 +4,7 @@ from lib import auth
 
 st.set_page_config(page_title="Chatbot", page_icon="🧠", layout="centered")
 auth.require_login()
+auth.render_sidebar()
 
 st.title("🧠 Chatbot (placeholder)")
 
