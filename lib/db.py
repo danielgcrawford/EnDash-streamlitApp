@@ -45,18 +45,76 @@ def init_db() -> None:
         """
     )
 
-    # Settings table (one row per user)
+    # ---------------- Settings (per user) ----------------
+    # NOTE: To change default units or setpoints for new users,
+    # edit the DEFAULT values in this CREATE TABLE statement.
     cur.execute(
         """
         CREATE TABLE IF NOT EXISTS settings (
-            id          SERIAL PRIMARY KEY,
-            user_id     INTEGER UNIQUE NOT NULL REFERENCES users(id),
-            temp_unit   TEXT DEFAULT 'F',
-            target_low  DOUBLE PRECISION DEFAULT 65.0,
-            target_high DOUBLE PRECISION DEFAULT 80.0
+            id SERIAL PRIMARY KEY,
+            user_id INTEGER UNIQUE NOT NULL REFERENCES users(id),
+
+            -- UNITS
+            -- Original data file units
+            orig_temp_unit   TEXT DEFAULT 'C',      -- 'C' or 'F'
+            orig_light_unit  TEXT DEFAULT 'PPFD',   -- 'PPFD', 'LUX', 'KLUX', 'FC', 'W_M2'
+
+            -- Desired dashboard temperature units (what graphs show)
+            temp_unit        TEXT DEFAULT 'F',      -- 'C' or 'F'
+
+            -- TEMPERATURE TARGETS (dashboard band)
+            target_low       REAL DEFAULT 65.0,     -- e.g. °F
+            target_high      REAL DEFAULT 80.0,
+
+            -- RELATIVE HUMIDITY TARGETS (%)
+            target_rh_low    REAL DEFAULT 70.0,
+            target_rh_high   REAL DEFAULT 95.0,
+
+            -- LIGHT & DLI TARGETS
+            target_ppfd      REAL DEFAULT 150.0,    -- µmol m-2 s-1
+            target_dli       REAL DEFAULT 8.0,      -- mol m-2 d-1
+
+            -- VPD TARGETS (kPa)
+            target_vpd_low   REAL DEFAULT 0.2,
+            target_vpd_high  REAL DEFAULT 0.8
         );
         """
     )
+
+    # --- Lightweight migration for older databases ---
+    # If the settings table already existed with fewer columns,
+    # add the missing ones without touching existing data.
+    cur.execute(
+        """
+        SELECT column_name
+        FROM information_schema.columns
+        WHERE table_name = 'settings';
+        """
+    )
+    existing_cols = {row["column_name"] for row in cur.fetchall()}
+
+    if "orig_temp_unit" not in existing_cols:
+        cur.execute("ALTER TABLE settings ADD COLUMN orig_temp_unit TEXT DEFAULT 'C';")
+    if "orig_light_unit" not in existing_cols:
+        cur.execute("ALTER TABLE settings ADD COLUMN orig_light_unit TEXT DEFAULT 'PPFD';")
+    if "temp_unit" not in existing_cols:
+        cur.execute("ALTER TABLE settings ADD COLUMN temp_unit TEXT DEFAULT 'F';")
+    if "target_low" not in existing_cols:
+        cur.execute("ALTER TABLE settings ADD COLUMN target_low REAL DEFAULT 65.0;")
+    if "target_high" not in existing_cols:
+        cur.execute("ALTER TABLE settings ADD COLUMN target_high REAL DEFAULT 80.0;")
+    if "target_rh_low" not in existing_cols:
+        cur.execute("ALTER TABLE settings ADD COLUMN target_rh_low REAL DEFAULT 70.0;")
+    if "target_rh_high" not in existing_cols:
+        cur.execute("ALTER TABLE settings ADD COLUMN target_rh_high REAL DEFAULT 95.0;")
+    if "target_ppfd" not in existing_cols:
+        cur.execute("ALTER TABLE settings ADD COLUMN target_ppfd REAL DEFAULT 150.0;")
+    if "target_dli" not in existing_cols:
+        cur.execute("ALTER TABLE settings ADD COLUMN target_dli REAL DEFAULT 8.0;")
+    if "target_vpd_low" not in existing_cols:
+        cur.execute("ALTER TABLE settings ADD COLUMN target_vpd_low REAL DEFAULT 0.2;")
+    if "target_vpd_high" not in existing_cols:
+        cur.execute("ALTER TABLE settings ADD COLUMN target_vpd_high REAL DEFAULT 0.8;")
 
     # App meta key/value store
     cur.execute(
@@ -139,22 +197,76 @@ def get_or_create_settings(user_id: int):
     return row
 
 
-def update_settings(user_id: int, temp_unit: str, target_low: float, target_high: float) -> None:
+def update_settings(
+    user_id: int,
+    *,
+    orig_temp_unit: str,
+    orig_light_unit: str,
+    temp_unit: str,
+    target_low: float,
+    target_high: float,
+    target_rh_low: float,
+    target_rh_high: float,
+    target_ppfd: float,
+    target_dli: float,
+    target_vpd_low: float,
+    target_vpd_high: float,
+) -> None:
+    """
+    Update all per-user unit + setpoint settings in one go.
+
+    Call pattern (keyword args only), e.g.:
+
+        db.update_settings(
+            user["id"],
+            orig_temp_unit=...,
+            orig_light_unit=...,
+            temp_unit=...,
+            target_low=...,
+            target_high=...,
+            target_rh_low=...,
+            target_rh_high=...,
+            target_ppfd=...,
+            target_dli=...,
+            target_vpd_low=...,
+            target_vpd_high=...,
+        )
+    """
     conn = get_conn()
     cur = conn.cursor()
     cur.execute(
         """
         UPDATE settings
-        SET temp_unit = %s,
+        SET
+            orig_temp_unit = %s,
+            orig_light_unit = %s,
+            temp_unit = %s,
             target_low = %s,
-            target_high = %s
+            target_high = %s,
+            target_rh_low = %s,
+            target_rh_high = %s,
+            target_ppfd = %s,
+            target_dli = %s,
+            target_vpd_low = %s,
+            target_vpd_high = %s
         WHERE user_id = %s;
         """,
-        (temp_unit, target_low, target_high, user_id),
+        (
+            orig_temp_unit,
+            orig_light_unit,
+            temp_unit,
+            target_low,
+            target_high,
+            target_rh_low,
+            target_rh_high,
+            target_ppfd,
+            target_dli,
+            target_vpd_low,
+            target_vpd_high,
+            user_id,
+        ),
     )
     conn.commit()
-    cur.close()
-    conn.close()
 
 
 # -------- Files (cleaned CSVs in Neon) --------
