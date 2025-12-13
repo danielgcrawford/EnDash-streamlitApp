@@ -3,6 +3,7 @@
 import streamlit as st
 from psycopg2 import errors
 from lib import auth, db
+from pathlib import Path
 
 st.set_page_config(page_title="Admin", page_icon="🔒", layout="centered")
 auth.require_login()
@@ -15,6 +16,14 @@ if not user["is_admin"]:
     st.stop()
 
 st.title("🔒 Admin")
+
+#Admin download of User Files from DB
+@st.cache_data(show_spinner=False)
+def _get_file_bytes_cached(file_id: int):
+    """"
+    Cache file bytes per file_id to reduce repeated DB hits on reruns
+    """
+    return db.get_file_bytes(file_id)
 
 # ---------- One-time Admin Password Change ----------
 finalized = (db.get_meta("admin_pw_finalized") == "1")
@@ -127,3 +136,54 @@ else:
                     new_hash = auth.hash_password(new_pw)
                     db.update_user_password(user_id, new_hash)
                     st.success(f"Password updated for {username}.")
+
+            st.divider()
+            st.markdown("#### Uploaded Data Files")
+
+            user_files = db.list_user_files(user_id)
+            if not user_files:
+                st.caption("No files uploaded.")
+            else: 
+                #Header Row
+                h1, h2, h3 = st.columns([1,6,3])
+                with h1:
+                    st.caption(" ")
+                with h2:
+                    st.caption ("Filename")
+                with h3:
+                    st.caption("Uploaded at")
+
+                for frec in user_files:
+                    file_id = frec["id"]
+                    fname = frec["filename"]
+                    uploaded_at = frec["uploaded_at"]
+
+                    c1, c2, c3 = st.columns([1,6,3])
+
+                    #Click to download file
+                    with c1:
+                        file_obj = _get_file_bytes_cached(file_id)
+                        if file_obj is None:
+                            st.write("-")
+                        else:
+                            ext = Path(fname).suffix.lower()
+                            if ext == ".csv":
+                                mime = "text/csv"
+                            elif ext in [".xlsx",".xls"]:
+                                mime = "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+                            else:
+                                mime = "application/octect-stream"
+
+                            st.download_button(
+                                label="⬇️",
+                                data=file_obj["bytes"],
+                                file_name=fname,
+                                mime=mime,
+                                key=f"d1_{user_id}_{file_id}",
+                                help="Download this file"
+                            )
+                    
+                    with c2:
+                        st.write(fname)
+                    with c3:
+                        st.write(str(uploaded_at))
