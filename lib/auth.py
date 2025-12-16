@@ -74,7 +74,7 @@ def render_sidebar():
             # Other pages for any logged-in user
             st.page_link("pages/1_Upload.py", label="Upload Files")
             st.page_link("pages/2_Settings.py", label="Settings & Setpoints")
-            st.page_link("pages/3_Dashboard.py", label="Dashboard Analysis")
+            #st.page_link("pages/3_Dashboard.py", label="Dashboard Analysis")
             st.page_link("pages/4_Chatbot.py", label="Chatbot")
 
 
