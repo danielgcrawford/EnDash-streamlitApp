@@ -292,7 +292,7 @@ def apply_time_axis_formatting(ax, fig, x_values):
     ax.xaxis.set_major_formatter(formatter)
     fig.autofmt_xdate(rotation=30, ha="right")
 
-
+#Naming
 def pretty_label(col: str, temp_unit: str) -> str:
     """Human-readable labels with units (write out words instead of abbreviations)."""
     temp_symbol = "°F" if temp_unit == "F" else "°C"
@@ -303,7 +303,7 @@ def pretty_label(col: str, temp_unit: str) -> str:
     if col == "RH":
         return "Relative Humidity (%)"
     if col == "PAR":
-        return "Photosynthetic Photon Flux Density (µmol m⁻² s⁻¹)"
+        return "Light Intensity (PPFD - µmol m⁻² s⁻¹)"
     if col == "VPDleaf":
         return "Leaf Vapor Pressure Deficit (kPa)"
     if col == "VPDair":
@@ -598,16 +598,16 @@ orig_light_unit = settings.get("orig_light_unit", "PPFD")
 
 # Targets
 target_temp_low = float(settings.get("target_low", 65.0))
-target_temp_high = float(settings.get("target_high", 80.0))
+target_temp_high = float(settings.get("target_high", 85.0))
 
-target_rh_low = float(settings.get("target_rh_low", 70.0))
+target_rh_low = float(settings.get("target_rh_low", 700.0))
 target_rh_high = float(settings.get("target_rh_high", 95.0))
 
-target_ppfd = float(settings.get("target_ppfd", 150.0))
-target_dli = float(settings.get("target_dli", 8.0))
+target_ppfd = float(settings.get("target_ppfd", 750.0))
+target_dli = float(settings.get("target_dli", 10.0))
 
 target_vpd_low = float(settings.get("target_vpd_low", 0.2))
-target_vpd_high = float(settings.get("target_vpd_high", 0.8))
+target_vpd_high = float(settings.get("target_vpd_high", 1.0))
 
 # ----- Core series -----
 air_raw = df["AirTemp"].astype(float) if "AirTemp" in df.columns else None
@@ -778,7 +778,50 @@ if numeric_cols:
         )
         summary = pd.concat([summary, dli_row], axis=0)
 
-    st.dataframe(summary.style.format("{:.1f}"), use_container_width=True)
+        # --- Display formatting: per-row decimals + PPFD Min/Average as "-" ---
+        ppfd_label = "Light Intensity (PPFD - µmol m⁻² s⁻¹)"
+
+        def row_format_spec(row_label: str) -> str:
+            # Customize these however you want
+            if "Relative Humidity" in row_label:
+                return "{:.0f}"
+            if "Vapor Pressure Deficit" in row_label:
+                return "{:.2f}"
+            if "Light Intensity" in row_label:
+                return "{:.0f}"
+            if "Daily Light Integral" in row_label:
+                return "{:.1f}"
+            if "Temperature" in row_label:
+                return "{:.0f}"
+            return "{:.1f}"  # default
+
+        def fmt_cell(val, fmt: str) -> str:
+            if pd.isna(val):
+                return "-"
+            try:
+                return fmt.format(float(val))
+            except Exception:
+                return str(val)
+
+        summary_display = summary.copy()
+
+        # Force PPFD Min/Average to be "-"
+        if ppfd_label in summary_display.index:
+            summary_display.loc[ppfd_label, "Min"] = np.nan
+            summary_display.loc[ppfd_label, "Average"] = np.nan
+
+        # Convert to formatted strings (per-row format spec)
+        for idx in summary_display.index:
+            fmt = row_format_spec(str(idx))
+            for col in summary_display.columns:
+                # Keep the explicit "-" behavior for PPFD Min/Average
+                if idx == ppfd_label and col in ["Min", "Average"]:
+                    summary_display.at[idx, col] = "-"
+                else:
+                    summary_display.at[idx, col] = fmt_cell(summary_display.at[idx, col], fmt)
+
+        st.dataframe(summary_display, use_container_width=True)
+
 else:
     st.info("No numeric columns found to summarize.")
 
@@ -835,11 +878,12 @@ if summary is not None:
     ax_summary.set_title(title_text, fontsize=10, pad=20)
 
     tbl = ax_summary.table(
-        cellText=summary.round(1).values,
-        rowLabels=summary.index,
-        colLabels=summary.columns,
+        cellText=summary_display.values,   # <-- uses the same formatted strings (and "-" for PPFD)
+        rowLabels=summary_display.index,
+        colLabels=summary_display.columns,
         loc="center",
     )
+
     tbl.auto_set_font_size(False)
     tbl.set_fontsize(8)
     tbl.scale(1.0, 1.2)
@@ -936,29 +980,23 @@ for col in numeric_cols_no_par:
     # Temperature target bands
     if col in ["AirTemp", "LeafTemp"]:
         ax.axhline(
-            target_temp_low,
-            color="blue",
-            linestyle="--",
-            linewidth=1.0,
-            label=f"Target low temperature ({target_temp_low:.1f})",
-        )
-        ax.axhline(
             target_temp_high,
             color="red",
             linestyle="--",
             linewidth=1.0,
             label=f"Target high temperature ({target_temp_high:.1f})",
         )
-
-    # Relative humidity target band
-    if col == "RH":
         ax.axhline(
-            target_rh_low,
+            target_temp_low,
             color="blue",
             linestyle="--",
             linewidth=1.0,
-            label=f"Target low Relative Humidity ({target_rh_low:.0f}%)",
+            label=f"Target low temperature ({target_temp_low:.1f})",
         )
+
+
+    # Relative humidity target band
+    if col == "RH":
         ax.axhline(
             target_rh_high,
             color="red",
@@ -966,16 +1004,17 @@ for col in numeric_cols_no_par:
             linewidth=1.0,
             label=f"Target high Relative Humidity ({target_rh_high:.0f}%)",
         )
-
-    # VPD target band
-    if col in ["VPDair", "VPDleaf"]:
         ax.axhline(
-            target_vpd_low,
+            target_rh_low,
             color="blue",
             linestyle="--",
             linewidth=1.0,
-            label=f"Target low VPD ({target_vpd_low:.2f} kPa)",
+            label=f"Target low Relative Humidity ({target_rh_low:.0f}%)",
         )
+        
+
+    # VPD target band
+    if col in ["VPDair", "VPDleaf"]:
         ax.axhline(
             target_vpd_high,
             color="red",
@@ -983,6 +1022,14 @@ for col in numeric_cols_no_par:
             linewidth=1.0,
             label=f"Target high VPD ({target_vpd_high:.2f} kPa)",
         )
+        ax.axhline(
+            target_vpd_low,
+            color="blue",
+            linestyle="--",
+            linewidth=1.0,
+            label=f"Target low VPD ({target_vpd_low:.2f} kPa)",
+        )
+        
 
     ax.legend(loc="best")
     ax.grid(True, linestyle=":", linewidth=0.5)
