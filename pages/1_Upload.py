@@ -4,97 +4,71 @@ import io
 import re
 import time
 from pathlib import Path
+from typing import Dict, List, Optional, Tuple
 
 import pandas as pd
 import streamlit as st
 
 from lib import auth, db
 
+
+# Adding numbers to column names
+def make_indexed_labels(raw_cols: List[str]) -> Tuple[List[str], Dict[str, str], Dict[str, str]]:
+    """
+    Create dropdown/display labels like: '[03] Air Temperature'
+    Returns:
+      labels: list of labeled strings (same order as raw_cols)
+      raw_to_label: {raw_name -> label}
+      label_to_raw: {label -> raw_name}
+    """
+    labels = [f"[{i:02d}] {c}" for i, c in enumerate(raw_cols)]
+    raw_to_label = {raw: f"[{i:02d}] {raw}" for i, raw in enumerate(raw_cols)}
+    label_to_raw = {v: k for k, v in raw_to_label.items()}
+    return labels, raw_to_label, label_to_raw
+
+
+def with_indexed_headers(df: pd.DataFrame) -> pd.DataFrame:
+    """Return a copy of df with headers renamed to '[##] name'."""
+    cols = [str(c) for c in df.columns]
+    new_cols = {c: f"[{i:02d}] {c}" for i, c in enumerate(cols)}
+    return df.rename(columns=new_cols)
+
 # ------------- Canonical mapping helpers -------------
 
-
 def normalize(s: str) -> str:
-    """Normalize a column name for matching."""
     s = s.replace("\ufeff", "").strip().lower()
     s = re.sub(r"\s+", "_", s)
-    s = re.sub(r"[^a-z0-9_]", "", s)  # "RHT-Temperature" -> "rhttemperature"
+    s = re.sub(r"[^a-z0-9_]", "", s)
     return s
 
 
-# Canonicals + specific aliases
 ALIASES = {
-    "Time": [
-        "time",
-        "timestamp",
-        "date_time",
-        "datetime",
-        "recorded at",
-        "date.time",
-        "logtime",
-        "measurement_time",
-    ],
+    "Time": ["time", "timestamp", "date_time", "datetime", "recorded at", "date.time", "logtime", "measurement_time"],
     "AirTemp": [
-        "airtemp",
-        "air_temp",
-        "tair",
-        "t_air",
-        "ambient_temp",
-        "air temperature",
-        "air temperature (c)",
-        "ta_c",
-        "rhttemperature",
-        "RHT - Temperature",
-        "rhttemp",
-        "RHT-Temperature",
+        "airtemp", "air_temp", "tair", "t_air", "ambient_temp", "air temperature", "air temperature (c)",
+        "ta_c", "rhttemperature", "RHT - Temperature", "rhttemp", "RHT-Temperature",
     ],
-    "LeafTemp": [
-        "leaftemp",
-        "leaf_temp",
-        "tleaf",
-        "leaf temperature",
-        "canopy_temp",
-        "tc_leaf",
-        "leaf_t (c)",
-        "leaf_tc",
-    ],
-    "RH": [
-        "rel_hum",
-        "relative_humidity",
-        "humidity",
-        "rh (%)",
-        "rhhumidity",
-        "rht_humidity",
-        "rh_percent",
-    ],
+    "LeafTemp": ["leaftemp", "leaf_temp", "tleaf", "leaf temperature", "canopy_temp", "tc_leaf", "leaf_t (c)", "leaf_tc"],
+    "RH": ["rel_hum", "relative_humidity", "humidity", "rh (%)", "rhhumidity", "rht_humidity", "rh_percent"],
     "PAR": [
-        "par",
-        "ppfd",
-        "photosynthetically active radiation",
-        "par_umol",
-        "par (umol m-2 s-1)",
-        "par_umolm2s",
-        "quantum",
-        "quantum_sensor",
-        "quantumsensor",
-        "quantumpar",
+        "par", "ppfd", "photosynthetically active radiation", "par_umol", "par (umol m-2 s-1)", "par_umolm2s",
+        "quantum", "quantum_sensor", "quantumsensor", "quantumpar",
     ],
 }
 CANON_ORDER = ["Time", "AirTemp", "LeafTemp", "RH", "PAR"]
 
 
-def build_alias_table():
+def build_alias_table() -> Dict[str, set]:
     table = {}
     for canon, aliases in ALIASES.items():
         table[canon] = {normalize(canon), *[normalize(a) for a in aliases]}
     return table
 
 
-def map_columns(raw_cols, alias_table):
-    """Return (mapping {raw -> canon}, missing canonicals, extras)."""
+def map_columns(raw_cols: List[str], alias_table: Dict[str, set]) -> Tuple[Dict[str, str], List[str], List[str]]:
     norm_to_raw = {normalize(c): c for c in raw_cols}
     mapping, used = {}, set()
 
-    # Exact/alias matches
     for canon, norms in alias_table.items():
         for norm, raw in norm_to_raw.items():
             if norm in norms and raw not in used:
@@ -102,7 +76,6 @@ def map_columns(raw_cols, alias_table):
                 used.add(raw)
                 break
 
-    # Fuzzy fallback
     for canon, norms in alias_table.items():
         if canon in mapping.values():
             continue
@@ -119,34 +92,28 @@ def map_columns(raw_cols, alias_table):
     return mapping, missing, extras
 
 
-def load_table_from_bytes(file_bytes: bytes, ext: str):
-    """Load CSV or Excel from raw bytes. Returns (df, file_type, encoding_used)."""
+def load_table_from_bytes(file_bytes: bytes, ext: str) -> Tuple[pd.DataFrame, str, Optional[str]]:
     ext = ext.lower()
 
     if ext in [".xlsx", ".xls"]:
-        bio = io.BytesIO(file_bytes)
-        df = pd.read_excel(bio)
+        df = pd.read_excel(io.BytesIO(file_bytes))
         return df, "excel", None
 
-    encodings = ["utf-8", "utf-8-sig", "latin1", "cp1252"]
+    encodings = ["utf-8", "utf-8-sig", "cp1252", "latin1"]
     last_err = None
     for enc in encodings:
         try:
-            bio = io.BytesIO(file_bytes)
-            df = pd.read_csv(bio, encoding=enc)
+            df = pd.read_csv(io.BytesIO(file_bytes), encoding=enc)
             return df, "csv", enc
         except Exception as e:
             last_err = e
 
-    if last_err is not None:
-        raise last_err
-    raise ValueError("Could not read file with any of the tried encodings.")
+    raise last_err if last_err is not None else ValueError("Could not read file.")
 
 
-def build_clean_dataframe(df_raw: pd.DataFrame, mapping: dict) -> pd.DataFrame:
-    """Create clean DataFrame with canonical column names in CANON_ORDER."""
-    canon_to_raw = {}
-    for raw, canon in mapping.items():
+def build_clean_dataframe(df_raw: pd.DataFrame, raw_to_canon: Dict[str, str]) -> pd.DataFrame:
+    canon_to_raw: Dict[str, str] = {}
+    for raw, canon in raw_to_canon.items():
         canon_to_raw.setdefault(canon, raw)
 
     data = {}
@@ -155,13 +122,13 @@ def build_clean_dataframe(df_raw: pd.DataFrame, mapping: dict) -> pd.DataFrame:
         if raw is None or raw not in df_raw.columns:
             continue
 
-        series = df_raw[raw]
+        s = df_raw[raw]
         if canon == "Time":
-            series = pd.to_datetime(series, errors="coerce")
+            s = pd.to_datetime(s, errors="coerce")
         else:
-            series = pd.to_numeric(series, errors="coerce")
+            s = pd.to_numeric(s, errors="coerce")
 
-        data[canon] = series
+        data[canon] = s
 
     if not data:
         return pd.DataFrame()
@@ -171,177 +138,287 @@ def build_clean_dataframe(df_raw: pd.DataFrame, mapping: dict) -> pd.DataFrame:
     if "Time" in df_clean.columns:
         df_clean = df_clean.dropna(subset=["Time"]).sort_values("Time")
 
-    df_clean = df_clean.dropna(axis=0, how="all").drop_duplicates()
-    return df_clean
+    return df_clean.dropna(axis=0, how="all").drop_duplicates()
 
 
 def username_slug(user) -> str:
-    base = (
-        user.get("username")
-        or user.get("email", "").split("@")[0]
-        or f"user{user['id']}"
-    )
+    base = user.get("username") or user.get("email", "").split("@")[0] or f"user{user['id']}"
     slug = re.sub(r"[^a-zA-Z0-9]+", "", base).lower()
     return slug or f"user{user['id']}"
 
 
-# ------------- Streamlit page -------------
+def canon_select_ui(
+    *,
+    raw_cols: List[str],
+    default_canon_to_raw: Dict[str, Optional[str]],
+    form_key: str,
+) -> Tuple[Dict[str, str], Dict[str, Optional[str]], List[str]]:
+    # Build "[##] ColName" labels for dropdowns
+    labeled_cols, raw_to_label, label_to_raw = make_indexed_labels(raw_cols)
 
+    options_all = ["(None)"] + labeled_cols
+    canon_to_raw: Dict[str, Optional[str]] = {}
+
+    for canon in CANON_ORDER:
+        default_raw = default_canon_to_raw.get(canon)
+        default_label = raw_to_label.get(default_raw) if default_raw else None
+        default_index = options_all.index(default_label) if default_label in options_all else 0
+
+        sel_label = st.selectbox(
+            f"{canon} column",
+            options_all,
+            index=default_index,
+            key=f"{form_key}_{canon}",
+        )
+
+        canon_to_raw[canon] = None if sel_label == "(None)" else label_to_raw[sel_label]
+
+    # Build raw_to_canon (the mapping your cleaning uses)
+    raw_to_canon: Dict[str, str] = {}
+    used = set()
+    duplicates = []
+
+    for canon, raw in canon_to_raw.items():
+        if not raw:
+            continue
+        if raw in used:
+            duplicates.append(raw)
+        else:
+            used.add(raw)
+            raw_to_canon[raw] = canon
+
+    return raw_to_canon, canon_to_raw, sorted(set(duplicates))
+
+# ------------- Streamlit page -------------
 
 st.set_page_config(page_title="Upload", page_icon="📂", layout="wide")
 auth.require_login()
 user = auth.current_user()
 auth.render_sidebar()
 
+db.init_db()
+
 st.title("📂 Upload data file (.csv or .xlsx)")
 
-uploaded = st.file_uploader(
-    "Choose a data file",
-    type=["csv", "xlsx", "xls"],
-)
+uploaded = st.file_uploader("Choose a data file", type=["csv", "xlsx", "xls"])
+new_upload_active = uploaded is not None
 
+# ---- Previously uploaded file selector (persistent) ----
+st.caption("Select a previously uploaded cleaned file to review/download it and manage its saved column mapping.")
+files = db.list_user_files(user["id"])
+
+last_ctx = db.get_last_upload_context(user["id"])
+last_file_id = last_ctx.get("file_id")
+
+options = {f"{rec['filename']} ({rec['uploaded_at']})": rec for rec in files}
+
+selected_label = None
+selected_file_rec = None
+selected_file_id = None
+
+if options:
+    labels = list(options.keys())
+    default_index = 0
+    if last_file_id is not None:
+        for i, lab in enumerate(labels):
+            if int(options[lab]["id"]) == int(last_file_id):
+                default_index = i
+                break
+
+    selected_label = st.selectbox(
+        "Previously uploaded files",
+        labels,
+        index=default_index,
+        key="uploaded_file_select",
+    )
+    selected_file_rec = options.get(selected_label)
+    selected_file_id = int(selected_file_rec["id"])
+else:
+    st.info("No cleaned files uploaded yet. Upload a file above to get started.")
+
+st.divider()
+
+# ---- Section A: existing file review/edit ----
+if (not new_upload_active) and (selected_file_id is not None):
+    st.subheader("Saved mapping + file preview")
+
+    map_rec = db.get_file_column_map(selected_file_id)
+
+    if map_rec and map_rec.get("canon_to_raw") is not None:
+        db.set_last_upload_context(
+            user["id"],
+            file_id=selected_file_id,
+            raw_columns=map_rec.get("raw_columns") or [],
+            canon_to_raw=map_rec.get("canon_to_raw") or {},
+        )
+
+    col1, col2 = st.columns([1, 1], gap="large")
+
+    with col1:
+        st.markdown("#### Cleaned file preview (stored in Neon)")
+        file_obj = db.get_file_bytes(selected_file_id)
+        if not file_obj:
+            st.error("Could not load file bytes from Neon.")
+        else:
+            df_clean = pd.read_csv(io.BytesIO(file_obj["bytes"]))
+            st.dataframe(df_clean.head(10), use_container_width=True)
+            st.caption(f"Detected columns: {', '.join(df_clean.columns)}")
+
+            st.download_button(
+                "⬇️ Download cleaned CSV",
+                data=file_obj["bytes"],
+                file_name=file_obj["filename"],
+                mime="text/csv",
+            )
+
+    with col2:
+        st.markdown("#### Saved column mapping (editable)")
+        if not map_rec:
+            st.info("No mapping metadata found for this file (older upload).")
+        else:
+            raw_cols = [str(c) for c in (map_rec.get("raw_columns") or [])]
+            saved_canon_to_raw = map_rec.get("canon_to_raw") or {}
+
+            if not raw_cols:
+                st.warning("No raw column list was saved for this file; selections cannot be edited.")
+            else:
+                with st.form("edit_saved_mapping_form"):
+                    st.caption(
+                        "These selections are saved with this file and also used as your default mapping template for Quick Upload."
+                    )
+                    _, canon_to_raw, duplicates = canon_select_ui(
+                        raw_cols=raw_cols,
+                        default_canon_to_raw=saved_canon_to_raw,
+                        form_key="savedmap",
+                    )
+                    save_map = st.form_submit_button("💾 Save mapping selections")
+
+                if save_map:
+                    if duplicates:
+                        st.error(f"Duplicate selections: {', '.join(duplicates)}")
+                    else:
+                        db.upsert_file_column_map(
+                            user["id"],
+                            selected_file_id,
+                            raw_columns=raw_cols,
+                            canon_to_raw=canon_to_raw,
+                            raw_preview_rows=map_rec.get("raw_preview"),
+                        )
+                        db.set_last_upload_context(
+                            user["id"],
+                            file_id=selected_file_id,
+                            raw_columns=raw_cols,
+                            canon_to_raw=canon_to_raw,
+                        )
+                        st.success("Saved. These selections will be used as defaults for Quick Upload.")
+
+                if map_rec.get("raw_preview"):
+                    with st.expander("Raw preview (first 10 rows from the original upload)", expanded=False):
+                        raw_prev_df = pd.DataFrame(map_rec["raw_preview"])
+                        st.dataframe(with_indexed_headers(raw_prev_df), use_container_width=True)
+
+
+# ---- Section B: New upload workflow ----
 if uploaded is not None:
+    st.divider()
+    st.subheader("New upload: map columns, generate cleaned file")
+
     original_name = uploaded.name
     ext = Path(original_name).suffix or ".csv"
     file_bytes_raw = uploaded.getvalue()
 
-    try:
-        # Step 1 – load & preview raw file
-        df_raw, file_type, encoding_used = load_table_from_bytes(file_bytes_raw, ext)
+    df_raw, file_type, encoding_used = load_table_from_bytes(file_bytes_raw, ext)
+    raw_cols = [str(c) for c in df_raw.columns]
 
-        if file_type == "excel":
-            st.caption("Read file as Excel (.xlsx/.xls).")
+    if file_type == "excel":
+        st.caption("Read file as Excel (.xlsx/.xls).")
+    else:
+        st.caption(f"Read CSV using encoding: `{encoding_used}`")
+
+    st.markdown("#### Original file preview (this upload)")
+    st.dataframe(with_indexed_headers(df_raw.head(10)), use_container_width=True)
+
+
+    alias_table = build_alias_table()
+    auto_raw_to_canon, _, _ = map_columns(raw_cols, alias_table)
+
+    auto_canon_to_raw = {}
+    for raw, canon in auto_raw_to_canon.items():
+        auto_canon_to_raw.setdefault(canon, raw)
+
+    default_canon_to_raw = dict(auto_canon_to_raw)
+    template = (last_ctx.get("canon_to_raw") or {})
+    for canon, raw in template.items():
+        if raw and raw in raw_cols:
+            default_canon_to_raw[canon] = raw
+
+    st.markdown("#### Step 1: Review and adjust column mapping")
+    st.caption(
+        "Defaults come from automatic matching, but your most recently saved mapping selections "
+        "are used when they match this dataset."
+    )
+
+    with st.form("new_upload_mapping_form"):
+        raw_to_canon, canon_to_raw, duplicates = canon_select_ui(
+            raw_cols=raw_cols,
+            default_canon_to_raw=default_canon_to_raw,
+            form_key="newupload",
+        )
+        submitted = st.form_submit_button("✅ Generate cleaned file and save to Neon")
+
+    if submitted:
+        if duplicates:
+            st.error(f"Duplicate selections: {', '.join(duplicates)}")
+            st.stop()
+
+        if not raw_to_canon:
+            st.warning("No columns were mapped. Please select at least one column and try again.")
+            st.stop()
+
+        df_clean = build_clean_dataframe(df_raw, raw_to_canon)
+
+        required_for_dashboard = ["Time", "AirTemp", "RH"]
+        missing = [c for c in required_for_dashboard if c not in df_clean.columns]
+        if missing:
+            st.error("Missing required dashboard columns: " + ", ".join(missing))
+            st.stop()
+
+        if "Time" in df_clean.columns and not df_clean["Time"].isna().all():
+            data_start = df_clean["Time"].min()
+            data_start_str = data_start.strftime("%Y%m%dT%H%M")
         else:
-            st.caption(f"Read CSV using encoding: `{encoding_used}`")
+            data_start_str = time.strftime("%Y%m%dT%H%M", time.gmtime())
 
-        st.subheader("Step 1: Original file preview")
-        st.caption("First 10 rows from the uploaded file (raw).")
-        st.dataframe(df_raw.head(10), use_container_width=True)
+        uname = username_slug(user)
+        stored_filename = f"{uname}_{data_start_str}.csv"
 
-        # Step 2 – automatic mapping & user review
-        alias_table = build_alias_table()
-        raw_cols = [str(c) for c in df_raw.columns]
-        auto_mapping, _, _ = map_columns(raw_cols, alias_table)
+        cleaned_bytes = df_clean.to_csv(index=False).encode("utf-8")
+        file_id = db.add_file_record(user["id"], stored_filename, cleaned_bytes)
 
-        auto_canon_to_raw = {}
-        for raw_col, canon in auto_mapping.items():
-            auto_canon_to_raw.setdefault(canon, raw_col)
-
-        st.subheader("Step 2: Review and adjust column names")
-        st.markdown(
-            "Select which **data column** should be used for analyzing each parameter. "
-            "Defaults come from automatic matching; adjust if needed."
+        db.upsert_file_column_map(
+            user["id"],
+            file_id,
+            raw_columns=raw_cols,
+            canon_to_raw=canon_to_raw,
+            raw_preview_rows=df_raw.head(10).where(pd.notnull(df_raw.head(10)), None).to_dict(orient="records"),
         )
 
-        with st.form("mapping_form"):
-            mapping_selections = {}
-            options_all = ["(None)"] + raw_cols
+        db.set_last_upload_context(
+            user["id"],
+            file_id=file_id,
+            raw_columns=raw_cols,
+            canon_to_raw=canon_to_raw,
+        )
 
-            for canon in CANON_ORDER:
-                default_raw = auto_canon_to_raw.get(canon)
-                if default_raw in raw_cols:
-                    default_index = raw_cols.index(default_raw) + 1
-                else:
-                    default_index = 0
+        st.success(f"Saved cleaned file in Neon as `{stored_filename}`.")
 
-                sel = st.selectbox(
-                    f"{canon} column",
-                    options_all,
-                    index=default_index,
-                    key=f"map_{canon}",
-                )
-                mapping_selections[canon] = sel
+        st.markdown("#### Cleaned & mapped file preview")
+        st.dataframe(df_clean.head(10), use_container_width=True)
+        st.caption(f"Detected columns: {', '.join(df_clean.columns)}")
 
-            submitted = st.form_submit_button("✅ Accept naming and generate dashboard report")
-
-        if submitted:
-            # Build mapping raw -> canon from user selections
-            user_mapping = {}
-            used_raw = set()
-            duplicate_raws = set()
-
-            for canon in CANON_ORDER:
-                raw_sel = mapping_selections.get(canon)
-                if not raw_sel or raw_sel == "(None)":
-                    continue
-                if raw_sel in used_raw:
-                    duplicate_raws.add(raw_sel)
-                else:
-                    used_raw.add(raw_sel)
-                    user_mapping[raw_sel] = canon
-
-            if duplicate_raws:
-                st.error(
-                    "Each raw column can only be mapped to **one** parameter column.\n\n"
-                    "Duplicate selections: " + ", ".join(sorted(duplicate_raws))
-                )
-                st.stop()
-
-            if not user_mapping:
-                st.warning(
-                    "No columns were mapped. Please select at least one column "
-                    "for a field and try again."
-                )
-                st.stop()
-
-            df_clean = build_clean_dataframe(df_raw, user_mapping)
-
-            # Require at least Time, AirTemp, RH for the dashboard to be useful
-            required_for_dashboard = ["Time", "AirTemp", "RH"]
-            missing_for_dashboard = [c for c in required_for_dashboard if c not in df_clean.columns]
-            if missing_for_dashboard:
-                st.error(
-                    "The cleaned file is missing required columns for the Dashboard: "
-                    + ", ".join(missing_for_dashboard)
-                    + ". Please adjust your naming selections and try again."
-                )
-                st.stop()
-
-            # DataStartTime for filename
-            if "Time" in df_clean.columns and not df_clean["Time"].isna().all():
-                data_start = df_clean["Time"].min()
-                data_start_str = data_start.strftime("%Y%m%dT%H%M")
-            else:
-                data_start_str = time.strftime("%Y%m%dT%H%M", time.gmtime())
-
-            uname = username_slug(user)
-            stored_filename = f"{uname}_{data_start_str}.csv"
-
-            cleaned_bytes = df_clean.to_csv(index=False).encode("utf-8")
-            db.add_file_record(user["id"], stored_filename, cleaned_bytes)
-
-            st.success(
-                f"Cleaned file saved in Neon as `{stored_filename}`. "
-                "You can now select it on the Dashboard."
-            )
-
-            st.subheader("Cleaned & mapped file preview")
-            st.caption("First 10 rows from the cleaned CSV (canonical columns).")
-            st.dataframe(df_clean.head(10), use_container_width=True)
-
-            st.download_button(
-                label="⬇️ Optional: Download cleaned CSV",
-                data=cleaned_bytes,
-                file_name=f"{uname}_{data_start_str}_clean.csv",
-                mime="text/csv",
-            )
-
-            with st.expander("Final column mapping details", expanded=True):
-                rows = [(raw, canon) for raw, canon in user_mapping.items()]
-                mapping_df = pd.DataFrame(
-                    rows, columns=["Raw column name", "Canonical column"]
-                )
-                st.table(mapping_df)
-
-    except Exception as e:
-        st.error(f"Could not read or process file: {e}")
-
-st.divider()
-st.subheader("Your uploads")
-
-files = db.list_user_files(user["id"])
-if files:
-    for rec in files:
-        st.write(f"• {rec['filename']} — uploaded {rec['uploaded_at']}")
-else:
-    st.caption("No files yet.")
+        st.download_button(
+            "⬇️ Download cleaned CSV",
+            data=cleaned_bytes,
+            file_name=stored_filename,
+            mime="text/csv",
+        )

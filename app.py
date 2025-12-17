@@ -441,13 +441,65 @@ if quick_file is not None:
             # 1) Load raw table
             df_raw, file_type, encoding_used = load_table_from_bytes(file_bytes_raw, ext)
 
-            # 2) Automatic column mapping
+            # 2) Column mapping (use your saved Upload-page selections when possible)
             alias_table = build_alias_table()
             raw_cols = [str(c) for c in df_raw.columns]
             auto_mapping, _, _ = map_columns(raw_cols, alias_table)
 
             if not auto_mapping:
                 raise ValueError("Could not automatically match any columns to Time/AirTemp/RH/PAR.")
+
+            # Try to apply the user's LAST SAVED mapping template from the Upload page.
+            prefs = db.get_last_upload_context(user["id"])
+            template = prefs.get("canon_to_raw") or {}
+
+            preferred_mapping = {}
+            used = set()
+
+            # First: apply template (canon -> raw) when the raw column exists in this file
+            for canon, raw in template.items():
+                if not raw:
+                    continue
+                if raw in raw_cols and raw not in used:
+                    preferred_mapping[raw] = canon
+                    used.add(raw)
+
+            # Second: fill any missing canonicals using the automatic mapping
+            if preferred_mapping:
+                mapped_canons = set(preferred_mapping.values())
+                for raw, canon in auto_mapping.items():
+                    if canon in mapped_canons:
+                        continue
+                    if raw in used:
+                        continue
+                    preferred_mapping[raw] = canon
+                    used.add(raw)
+
+            mapping_to_use = preferred_mapping if preferred_mapping else auto_mapping
+
+            # 3) Build cleaned dataframe
+            df_clean = build_clean_dataframe(df_raw, mapping_to_use)
+
+            ...
+
+            cleaned_bytes = df_clean.to_csv(index=False).encode("utf-8")
+            file_db_id = db.add_file_record(user["id"], stored_filename, cleaned_bytes)
+
+            # Save mapping metadata so it can be reviewed/edited on the Upload page later
+            try:
+                canon_to_raw = {canon: None for canon in CANON_ORDER}
+                for raw, canon in mapping_to_use.items():
+                    canon_to_raw[canon] = raw
+
+                db.upsert_file_column_map(
+                    user["id"],
+                    file_db_id,
+                    raw_columns=raw_cols,
+                    canon_to_raw=canon_to_raw,
+                    raw_preview_rows=df_raw.head(10).to_dict(orient="records"),
+                )
+            except Exception:
+                pass
 
             # 3) Build cleaned dataframe
             df_clean = build_clean_dataframe(df_raw, auto_mapping)
