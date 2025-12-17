@@ -164,7 +164,7 @@ def load_table_from_bytes(file_bytes: bytes, ext: str):
     """Load CSV or Excel from raw bytes. Returns (df, file_type, encoding_used)."""
     ext = ext.lower()
 
-    if ext in [".xlsx", ".xls"]:
+    if ext in [".xlsx", ".xls", ".xlsm"]:
         bio = io.BytesIO(file_bytes)
         df = pd.read_excel(bio)
         return df, "excel", None
@@ -292,6 +292,33 @@ def apply_time_axis_formatting(ax, fig, x_values):
     ax.xaxis.set_major_formatter(formatter)
     fig.autofmt_xdate(rotation=30, ha="right")
 
+
+def legend_below(ax, fig, ncol=3, y=-0.30):
+    """
+    Put the legend below the axes so it doesn't overlap data.
+    """
+    handles, labels = ax.get_legend_handles_labels()
+    if not handles:
+        return
+    ax.legend(
+        handles, labels,
+        loc="upper center",
+        bbox_to_anchor=(0.5, y),
+        ncol=ncol,
+        frameon=True,
+        fontsize=9,
+    )
+    # Make room at the bottom for the legend
+    fig.subplots_adjust(bottom=0.25)
+
+def plot_separator():
+    """
+    Add a visual break (space + line) between plots on the Streamlit page.
+    """
+    st.markdown("<div style='margin: 1.25rem 0;'></div>", unsafe_allow_html=True)
+    st.divider()
+    st.markdown("<div style='margin: 1.25rem 0;'></div>", unsafe_allow_html=True)
+
 #Naming
 def pretty_label(col: str, temp_unit: str) -> str:
     """Human-readable labels with units (write out words instead of abbreviations)."""
@@ -418,8 +445,8 @@ st.caption(
 )
 
 quick_file = st.file_uploader(
-    "Quick upload (.csv, .xlsx, .xls)",
-    type=["csv", "xlsx", "xls"],
+    "Quick upload (.csv, .xlsx, .xls, .xlsm)",
+    type=["csv", "xlsx", "xls", "xlsm"],
     key="quick_upload_file",
 )
 
@@ -1030,10 +1057,21 @@ if "PAR" in numeric_cols:
 
     lines1, labels1 = ax1.get_legend_handles_labels()
     lines2, labels2 = ax2.get_legend_handles_labels()
-    ax1.legend(lines1 + lines2, labels1 + labels2, loc="best")
+    # Combined legend below plot (no overlap)
+    ax1.legend(
+        lines1 + lines2, labels1 + labels2,
+        loc="upper center",
+        bbox_to_anchor=(0.5, -0.30),
+        ncol=2,
+        frameon=True,
+        fontsize=9,
+    )
+    fig.subplots_adjust(bottom=0.28)
+
     ax1.grid(True, linestyle=":", linewidth=0.5)
 
     st.pyplot(fig)
+    plot_separator()
     figs_for_pdf.append(fig)
 
     numeric_cols_no_par = [c for c in numeric_cols if c != "PAR"]
@@ -1129,10 +1167,11 @@ for col in numeric_cols_no_par:
         )
         
 
-    ax.legend(loc="best")
-    ax.grid(True, linestyle=":", linewidth=0.5)
-
+    legend_below(ax, fig, ncol=2, y=-0.30)
+    #ax.grid(True, linestyle=":", linewidth=0.5)
+    
     st.pyplot(fig)
+    plot_separator()
     figs_for_pdf.append(fig)
 
 # =========================

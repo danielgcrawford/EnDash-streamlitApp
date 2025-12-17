@@ -95,7 +95,7 @@ def map_columns(raw_cols: List[str], alias_table: Dict[str, set]) -> Tuple[Dict[
 def load_table_from_bytes(file_bytes: bytes, ext: str) -> Tuple[pd.DataFrame, str, Optional[str]]:
     ext = ext.lower()
 
-    if ext in [".xlsx", ".xls"]:
+    if ext in [".xlsx", ".xls", ".xlsm"]:
         df = pd.read_excel(io.BytesIO(file_bytes))
         return df, "excel", None
 
@@ -198,9 +198,9 @@ auth.render_sidebar()
 
 db.init_db()
 
-st.title("📂 Upload data file (.csv or .xlsx)")
+st.title("📂 Upload data file")
 
-uploaded = st.file_uploader("Choose a data file", type=["csv", "xlsx", "xls"])
+uploaded = st.file_uploader("Choose a data file", type=["csv", "xlsx", "xls", "xlsm"])
 new_upload_active = uploaded is not None
 
 # ---- Previously uploaded file selector (persistent) ----
@@ -331,7 +331,7 @@ if uploaded is not None:
     raw_cols = [str(c) for c in df_raw.columns]
 
     if file_type == "excel":
-        st.caption("Read file as Excel (.xlsx/.xls).")
+        st.caption("Read file as Excel (.xlsx/.xls/.xlsm).")
     else:
         st.caption(f"Read CSV using encoding: `{encoding_used}`")
 
