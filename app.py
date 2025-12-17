@@ -596,18 +596,18 @@ temp_unit = settings.get("temp_unit", "F")  # display unit 'F' or 'C'
 orig_temp_unit = settings.get("orig_temp_unit", None)  # 'C' or 'F'
 orig_light_unit = settings.get("orig_light_unit", "PPFD")
 
-# Targets
+# Targets / Default Setpoints
 target_temp_low = float(settings.get("target_low", 65.0))
 target_temp_high = float(settings.get("target_high", 85.0))
 
-target_rh_low = float(settings.get("target_rh_low", 700.0))
-target_rh_high = float(settings.get("target_rh_high", 95.0))
+target_rh_low = float(settings.get("target_rh_low", 50.0))
+target_rh_high = float(settings.get("target_rh_high", 90.0))
 
 target_ppfd = float(settings.get("target_ppfd", 750.0))
 target_dli = float(settings.get("target_dli", 10.0))
 
 target_vpd_low = float(settings.get("target_vpd_low", 0.2))
-target_vpd_high = float(settings.get("target_vpd_high", 1.0))
+target_vpd_high = float(settings.get("target_vpd_high", 1.5))
 
 # ----- Core series -----
 air_raw = df["AirTemp"].astype(float) if "AirTemp" in df.columns else None
@@ -911,11 +911,11 @@ if "PAR" in numeric_cols:
 
     ax1.axhline(
         target_ppfd,
-        color="gold",
+        color="tab:blue",
         linestyle="--",
         linewidth=1.0,
         zorder=2,
-        label=f"Target PPFD ({target_ppfd:.1f})",
+        label=f"Target PPFD ({target_ppfd:.0f})",
     )
 
     # DLI bars (only if computed)
@@ -935,7 +935,7 @@ if "PAR" in numeric_cols:
         )
         ax2.axhline(
             target_dli,
-            color="purple",
+            color="tab:orange",
             linestyle="--",
             linewidth=1.0,
             zorder=1,
