@@ -780,6 +780,7 @@ if numeric_cols:
 
         # --- Display formatting: per-row decimals + PPFD Min/Average as "-" ---
         ppfd_label = "Light Intensity (PPFD - µmol m⁻² s⁻¹)"
+        dli_label = "Daily Light Integral (mol m⁻² d⁻¹)"
 
         def row_format_spec(row_label: str) -> str:
             # Customize these however you want
@@ -802,8 +803,10 @@ if numeric_cols:
                 return fmt.format(float(val))
             except Exception:
                 return str(val)
-
+        
+        #Numeric for comparisons (color comparison to setpoints), String for display
         summary_display = summary.copy()
+        summary_numeric = summary.copy()
 
         # Force PPFD Min/Average to be "-"
         if ppfd_label in summary_display.index:
@@ -819,11 +822,85 @@ if numeric_cols:
                     summary_display.at[idx, col] = "-"
                 else:
                     summary_display.at[idx, col] = fmt_cell(summary_display.at[idx, col], fmt)
+        
+        # --- Cell coloring based on targets ---
+        def build_style_df(df_display: pd.DataFrame, df_numeric: pd.DataFrame) -> pd.DataFrame:
+            style = pd.DataFrame("", index=df_display.index, columns=df_display.columns)
 
-        st.dataframe(summary_display, use_container_width=True)
+            def set_color(i, j, color: str):
+                style.at[i, j] = f"color: {color};"
 
-else:
-    st.info("No numeric columns found to summarize.")
+            for row_label in df_display.index:
+                for col in df_display.columns:
+                    # Default: black
+                    color = "black"
+
+                    # Handle non-numeric / "-" cells safely
+                    try:
+                        val = df_numeric.loc[row_label, col]
+                    except Exception:
+                        val = np.nan
+
+                    # If it's missing or explicitly "-", keep black
+                    if pd.isna(val):
+                        set_color(row_label, col, "black")
+                        continue
+
+                    # PPFD & DLI rule: blue only if BELOW setpoint, else black
+                    if row_label == ppfd_label:
+                        color = "blue" if float(val) < float(target_ppfd) else "black"
+                        set_color(row_label, col, color)
+                        continue
+
+                    if "Daily Light Integral" in str(row_label):
+                        color = "blue" if float(val) < float(target_dli) else "black"
+                        set_color(row_label, col, color)
+                        continue
+
+                    # Temperature rows (Air + Leaf): blue below low, red above high, black within
+                    if "Temperature" in str(row_label):
+                        if float(val) < float(target_temp_low):
+                            color = "blue"
+                        elif float(val) > float(target_temp_high):
+                            color = "red"
+                        else:
+                            color = "black"
+                        set_color(row_label, col, color)
+                        continue
+
+                    # RH row
+                    if "Relative Humidity" in str(row_label):
+                        if float(val) < float(target_rh_low):
+                            color = "blue"
+                        elif float(val) > float(target_rh_high):
+                            color = "red"
+                        else:
+                            color = "black"
+                        set_color(row_label, col, color)
+                        continue
+
+                    # VPD rows (Air/Leaf VPD)
+                    if "Vapor Pressure Deficit" in str(row_label):
+                        if float(val) < float(target_vpd_low):
+                            color = "blue"
+                        elif float(val) > float(target_vpd_high):
+                            color = "red"
+                        else:
+                            color = "black"
+                        set_color(row_label, col, color)
+                        continue
+
+                    # Everything else: black
+                    set_color(row_label, col, "black")
+
+            return style
+
+        style_df = build_style_df(summary_display, summary_numeric)
+
+        # Render styled table
+        styler = summary_display.style.apply(lambda _: style_df, axis=None)
+        st.dataframe(styler, use_container_width=True)
+
 
 # =========================
 # Key Trends (Dashboard graphs)
@@ -964,7 +1041,28 @@ if "PAR" in numeric_cols:
 # ---------- Generic plots for remaining numeric columns ----------
 for col in numeric_cols_no_par:
     fig, ax = plt.subplots(figsize=(8, 3))
-    ax.plot(x_values, df_display[col], label=pretty_label(col, temp_unit))
+    y = df_display[col]
+
+    # Color the line based on target bands (black within, red above, blue below)
+    has_band = col in ["AirTemp", "LeafTemp", "RH", "VPDair", "VPDleaf"]
+
+    if has_band and y is not None and y.notna().any():
+        if col in ["AirTemp", "LeafTemp"]:
+            low, high = float(target_temp_low), float(target_temp_high)
+        elif col == "RH":
+            low, high = float(target_rh_low), float(target_rh_high)
+        else:  # VPDair / VPDleaf
+            low, high = float(target_vpd_low), float(target_vpd_high)
+
+        below = y < low
+        above = y > high
+        within = ~(below | above)
+
+        ax.plot(x_values, y.where(within), color="black", linewidth=1.2, label=pretty_label(col, temp_unit))
+        ax.plot(x_values, y.where(above), color="red", linewidth=1.2)
+        ax.plot(x_values, y.where(below), color="blue", linewidth=1.2)
+    else:
+        ax.plot(x_values, y, label=pretty_label(col, temp_unit))
 
     if use_time_axis:
         ax.set_xlabel("Time")
