@@ -1134,14 +1134,24 @@ if "PAR" in numeric_cols:
         ax1.set_xlabel("Index")
         ax1.xaxis.set_major_locator(plt.MaxNLocator(8))
 
-    lines1, labels1 = ax1.get_legend_handles_labels()
-    lines2, labels2 = ax2.get_legend_handles_labels()
-    # Combined legend below plot (no overlap)
+    # Combined legend (reordered)
+    h1, l1 = ax1.get_legend_handles_labels()
+    h2, l2 = ax2.get_legend_handles_labels()
+
+    handles = h1 + h2
+    labels  = l1 + l2
+
+    # Desired order: PPFD, Target PPFD, Target DLI, DLI  (edit if you want a different order)
+    order = [0, 1, 3, 2]  # <-- swap the last two
+
+    handles = [handles[i] for i in order]
+    labels  = [labels[i] for i in order]
+
     ax1.legend(
-        lines1 + lines2, labels1 + labels2,
+        handles, labels,
         loc="upper center",
-        bbox_to_anchor=(0.5, -0.30),
-        ncol=2,
+        bbox_to_anchor=(0.5, -0.33),
+        ncol=2,              # keep 2x2
         frameon=True,
         fontsize=9,
     )
@@ -1246,7 +1256,7 @@ for col in numeric_cols_no_par:
         )
         
 
-    legend_below(ax, fig, ncol=2, y=-0.30)
+    legend_below(ax, fig, ncol=3, y=-0.33) #Set number of columns in time series graph legend
     #ax.grid(True, linestyle=":", linewidth=0.5)
     
     st.pyplot(fig)
