@@ -1009,7 +1009,7 @@ if numeric_cols:
 
 
 # =========================
-# Key Trends (Dashboard graphs)
+# Time Series (Dashboard graphs)
 # =========================
 #st.markdown("### Key Trends")
 st.subheader("Time series graphs")
