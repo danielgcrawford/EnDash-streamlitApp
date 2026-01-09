@@ -488,75 +488,99 @@ def compute_irrigation_events_per_day(
     min_gap_min: float,
 ) -> dict:
     """
-    Returns:
+    Computes irrigation events per day PER ZONE (column), and returns:
+
       {
-        "events_per_day": pd.Series indexed by day (Timestamp) with integer counts,
+        "events_by_zone": pd.DataFrame indexed by full day (Timestamp),
+                          columns are irrigation_cols, values are integer events/day,
+        "events_total": pd.Series indexed by full day (sum across zones),
         "full_days": list[Timestamp],
         "day_to_plot": Timestamp|None,
-        "binary_any_day": pd.DataFrame with columns ["Time","IrrigationOn"] for day_to_plot
+        "binary_by_zone": dict[col -> pd.DataFrame(Time, IrrigationOn)] for day_to_plot
       }
+
+    Event definition:
+      - Rising edge (off -> on) after converting numeric signal to ON/OFF using trigger
+      - Enforces minimum time between events (min_gap_min) to avoid double counting
+        long irrigation runs across multiple log timesteps.
     """
     if "Time" not in df_in.columns or not irrigation_cols:
-        return {"events_per_day": None, "full_days": [], "day_to_plot": None, "binary_any_day": None}
+        return {
+            "events_by_zone": None,
+            "events_total": None,
+            "full_days": [],
+            "day_to_plot": None,
+            "binary_by_zone": None,
+        }
 
     dfw = df_in[["Time"] + irrigation_cols].copy()
     dfw["Time"] = pd.to_datetime(dfw["Time"], errors="coerce")
     dfw = dfw.dropna(subset=["Time"]).sort_values("Time")
     if dfw.empty:
-        return {"events_per_day": None, "full_days": [], "day_to_plot": None, "binary_any_day": None}
+        return {
+            "events_by_zone": None,
+            "events_total": None,
+            "full_days": [],
+            "day_to_plot": None,
+            "binary_by_zone": None,
+        }
 
     full_days = find_full_days(dfw["Time"])
     if not full_days:
-        return {"events_per_day": None, "full_days": [], "day_to_plot": None, "binary_any_day": None}
+        return {
+            "events_by_zone": None,
+            "events_total": None,
+            "full_days": [],
+            "day_to_plot": None,
+            "binary_by_zone": None,
+        }
 
-    # --- Event detection (per zone, then summed) ---
-    all_event_times = []
+    # -----------------------------
+    # 1) Count events/day PER ZONE
+    # -----------------------------
+    idx_days = pd.to_datetime(full_days)
+    events_df = pd.DataFrame(index=idx_days, columns=irrigation_cols, data=0, dtype=int)
+
     for col in irrigation_cols:
         sig = pd.to_numeric(dfw[col], errors="coerce").fillna(0.0)
         on = sig >= float(trigger)
-        ev = detect_event_times(dfw["Time"], on, float(min_gap_min))
-        if len(ev) > 0:
-            all_event_times.append(pd.Series(ev))
 
-    if not all_event_times:
-        # Still return zeros for full days
-        events_per_day = pd.Series(
-            data=[0] * len(full_days),
-            index=pd.to_datetime(full_days),
-            name="IrrigationEventsPerDay",
-        )
-    else:
-        ev_all = pd.concat(all_event_times, ignore_index=True)
-        ev_all = pd.to_datetime(ev_all, errors="coerce").dropna()
+        # Rising-edge + min-gap event times for this zone
+        ev_times = detect_event_times(dfw["Time"], on, float(min_gap_min))
 
-        counts = {}
-        for d in full_days:
-            counts[d] = int((ev_all.dt.date == d.date()).sum())
+        if len(ev_times) == 0:
+            continue
 
-        events_per_day = pd.Series(counts).sort_index()
-        events_per_day.name = "IrrigationEventsPerDay"
+        ev_dates = pd.Series(pd.to_datetime(ev_times)).dt.date
+        for d in idx_days:
+            events_df.at[d, col] = int((ev_dates == d.date()).sum())
 
-    # --- Build a 0/1 ON/OFF time series for a representative full day (most recent) ---
-    day_to_plot = full_days[-1]
+    events_total = events_df.sum(axis=1)
+    events_total.name = "IrrigationEventsPerDay_Total"
+
+    # -----------------------------------------------
+    # 2) Build 0/1 ON/OFF series per zone for 1 day
+    # -----------------------------------------------
+    day_to_plot = idx_days[-1]
     day_mask = dfw["Time"].dt.date == day_to_plot.date()
 
-    # Status-style binary (not event counts): ON if ANY zone is ON at that timestep
-    any_on = None
+    binary_by_zone = {}
     for col in irrigation_cols:
         sig = pd.to_numeric(dfw.loc[day_mask, col], errors="coerce").fillna(0.0)
         on = (sig >= float(trigger)).astype(int)
-        any_on = on if any_on is None else np.maximum(any_on, on)
 
-    binary_any_day = pd.DataFrame(
-        {"Time": dfw.loc[day_mask, "Time"].values, "IrrigationOn": any_on.values if any_on is not None else []}
-    )
+        binary_by_zone[col] = pd.DataFrame(
+            {"Time": dfw.loc[day_mask, "Time"].values, "IrrigationOn": on.values}
+        )
 
     return {
-        "events_per_day": events_per_day,
+        "events_by_zone": events_df,
+        "events_total": events_total,
         "full_days": full_days,
         "day_to_plot": day_to_plot,
-        "binary_any_day": binary_any_day,
+        "binary_by_zone": binary_by_zone,
     }
+
 
 # --- Small status badges (pills) used under metrics ---
 st.markdown(
@@ -1050,7 +1074,8 @@ irrig_stats = compute_irrigation_events_per_day(
     min_gap_min=irrigation_min_interval_min,
 )
 
-events_per_day = irrig_stats.get("events_per_day", None)
+events_by_zone = irrig_stats.get("events_by_zone", None)   # DataFrame (days x zones)
+events_total = irrig_stats.get("events_total", None)       # Series (days)
 
 # Build the summary table from numeric columns EXCLUDING irrigation raw signals
 numeric_cols = df_display.select_dtypes(include="number").columns.tolist()
@@ -1073,17 +1098,33 @@ if numeric_cols:
         )
         summary = pd.concat([summary, dli_row], axis=0)
 
-    # ---- Add irrigation events/day row (min/avg/max across FULL DAYS only (or 0 if none)) ----
-    if events_per_day is not None and not events_per_day.empty:
-        irrig_row = pd.DataFrame(
-            {
-                "Min": [float(events_per_day.min())],
-                "Average": [float(events_per_day.mean())],
-                "Max": [float(events_per_day.max())],
-            },
-            index=["Irrigation Events per Day (#)"],
-        )
-        summary = pd.concat([summary, irrig_row], axis=0)
+    # ---- Add irrigation events/day rows (PER ZONE, full days only) ----
+    if events_by_zone is not None and not events_by_zone.empty:
+        for col in events_by_zone.columns:
+            s = events_by_zone[col].astype(float)
+
+            irrig_row = pd.DataFrame(
+                {
+                    "Min": [float(s.min())],
+                    "Average": [float(s.mean())],
+                    "Max": [float(s.max())],
+                },
+                index=[f"{col} Events per Day (#)"],
+            )
+            summary = pd.concat([summary, irrig_row], axis=0)
+
+        # Optional: total across zones
+        if events_total is not None and not events_total.empty:
+            tot = events_total.astype(float)
+            total_row = pd.DataFrame(
+                {
+                    "Min": [float(tot.min())],
+                    "Average": [float(tot.mean())],
+                    "Max": [float(tot.max())],
+                },
+                index=["Total Irrigation Events per Day (#)"],
+            )
+            summary = pd.concat([summary, total_row], axis=0)
 
     # --- Display formatting: per-row decimals + PPFD Min/Average as "-" ---
     ppfd_label = "Light Intensity (PPFD - µmol m⁻² s⁻¹)"
@@ -1381,6 +1422,7 @@ if "PAR" in numeric_cols:
     figs_for_pdf.append(fig)
 
     numeric_cols_no_par = [c for c in numeric_cols if c != "PAR"]
+    numeric_cols_no_par = [c for c in numeric_cols_no_par if c not in irrigation_cols]
 
 # ---------- Generic plots for remaining numeric columns ----------
 for col in numeric_cols_no_par:
@@ -1481,43 +1523,59 @@ for col in numeric_cols_no_par:
     figs_for_pdf.append(fig)
 
 # ----------------------------------------------------------
-# Irrigation plots
+# Irrigation plots (PER ZONE)
 # ----------------------------------------------------------
-if events_per_day is not None and not events_per_day.empty and use_time_axis:
-    # --- Plot 1: Irrigation Events per Day (bar chart for FULL days only) ---
+if use_time_axis and events_by_zone is not None and not events_by_zone.empty:
+    cols = list(events_by_zone.columns)
+    n = len(cols)
+
+    # --- Plot 1: Events per Day (grouped bars by zone) ---
     fig_ir, ax_ir = plt.subplots(figsize=(8, 3))
     ax_ir.set_title("Irrigation Events per Day (Full Days Only)")
     ax_ir.set_ylabel("Events per day")
-
-    bar_x = events_per_day.index + pd.Timedelta(hours=12)
-    ax_ir.bar(bar_x, events_per_day.values, width=0.42, align="center")
-
     ax_ir.set_xlabel("Date")
-    apply_time_axis_formatting(ax_ir, fig_ir, events_per_day.index)
+
+    base_x = events_by_zone.index + pd.Timedelta(hours=12)
+
+    # width in "days" units for datetime bars
+    width = 0.8 / max(n, 1)
+
+    for i, col in enumerate(cols):
+        # center the grouped bars around the day midpoint
+        offset_days = (i - (n - 1) / 2) * width
+        x = base_x + pd.to_timedelta(offset_days, unit="D")
+        ax_ir.bar(x, events_by_zone[col].values, width=width * 0.95, align="center", label=col)
+
+    apply_time_axis_formatting(ax_ir, fig_ir, events_by_zone.index)
+    legend_below(ax_ir, fig_ir, ncol=min(3, n), y=-0.33)
+
     st.pyplot(fig_ir)
     plot_separator()
     figs_for_pdf.append(fig_ir)
 
-    # --- Plot 2: Irrigation ON/OFF over a representative full day (binary 0/1) ---
-    day_df = irrig_stats.get("binary_any_day", None)
+    # --- Plot 2+: ON/OFF (Binary) per zone for a representative full day ---
     day_to_plot = irrig_stats.get("day_to_plot", None)
+    binary_by_zone = irrig_stats.get("binary_by_zone", None)
 
-    if day_df is not None and not day_df.empty and day_to_plot is not None:
-        fig_day, ax_day = plt.subplots(figsize=(8, 3))
-        ax_day.set_title(f"Irrigation ON/OFF (Binary) — {day_to_plot.date()}")
-        ax_day.set_ylabel("Irrigation (0=Off, 1=On)")
-        ax_day.set_xlabel("Time of day")
+    if day_to_plot is not None and binary_by_zone:
+        for col in cols:
+            day_df = binary_by_zone.get(col)
+            if day_df is None or day_df.empty:
+                continue
 
-        ax_day.step(day_df["Time"], day_df["IrrigationOn"], where="post", linewidth=1.5)
-        ax_day.set_ylim(-0.1, 1.1)
+            fig_day, ax_day = plt.subplots(figsize=(8, 3))
+            ax_day.set_title(f"{col} ON/OFF Over 24 Hours — {day_to_plot.date()}")
+            ax_day.set_ylabel("Irrigation (0=Off, 1=On)")
+            ax_day.set_xlabel("Time of day")
 
-        apply_time_axis_formatting(ax_day, fig_day, day_df["Time"])
-        st.pyplot(fig_day)
-        plot_separator()
-        figs_for_pdf.append(fig_day)
+            ax_day.step(day_df["Time"], day_df["IrrigationOn"], where="post", linewidth=1.5)
+            ax_day.set_ylim(-0.1, 1.1)
 
-# Ensure irrigation signal columns do NOT show up in the generic numeric plots
-numeric_cols_no_par = [c for c in numeric_cols_no_par if c not in irrigation_cols]
+            apply_time_axis_formatting(ax_day, fig_day, day_df["Time"])
+
+            st.pyplot(fig_day)
+            plot_separator()
+            figs_for_pdf.append(fig_day)
 
 # =========================
 # Download Dashboard button (replaces old Full Dashboard)
