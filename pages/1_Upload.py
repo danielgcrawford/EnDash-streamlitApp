@@ -46,17 +46,24 @@ ALIASES = {
     "Time": ["time", "timestamp", "date_time", "datetime", "recorded at", "date.time", "logtime", "measurement_time"],
     "AirTemp": [
         "airtemp", "air_temp", "tair", "t_air", "ambient_temp", "air temperature", "air temperature (c)",
-        "ta_c", "rhttemperature", "RHT - Temperature", "rhttemp", "RHT-Temperature",
-    ],
+        "ta_c", "rhttemperature", "RHT - Temperature", "rhttemp", "RHT-Temperature"],
     "LeafTemp": ["leaftemp", "leaf_temp", "tleaf", "leaf temperature", "canopy_temp", "tc_leaf", "leaf_t (c)", "leaf_tc"],
     "RH": ["rel_hum", "relative_humidity", "humidity", "rh (%)", "rhhumidity", "rht_humidity", "rh_percent"],
     "PAR": [
         "par", "ppfd", "photosynthetically active radiation", "par_umol", "par (umol m-2 s-1)", "par_umolm2s",
-        "quantum", "quantum_sensor", "quantumsensor", "quantumpar",
-    ],
+        "quantum", "quantum_sensor", "quantumsensor", "quantumpar"],
+    "Irrigation1": ["irrigation", "irrigation1", "irrigation_1", "irrig_1", "zone1", "valve1", "mist1"],
+    "Irrigation2": ["irrigation2", "irrigation_2", "irrig_2", "zone2", "valve2", "mist2"],
+    "Irrigation3": ["irrigation3", "irrigation_3", "irrig_3", "zone3", "valve3", "mist3"],
+    "Irrigation4": ["irrigation4", "irrigation_4", "irrig_4", "zone4", "valve4", "mist4"],
+    "Irrigation5": ["irrigation5", "irrigation_5", "irrig_5", "zone5", "valve5", "mist5"],
 }
-CANON_ORDER = ["Time", "AirTemp", "LeafTemp", "RH", "PAR"]
 
+MAX_IRRIGATION_ZONES = 5
+
+CANON_BASE = ["Time", "AirTemp", "LeafTemp", "RH", "PAR"]
+IRR_CANONS = [f"Irrigation{i}" for i in range(1, MAX_IRRIGATION_ZONES + 1)]
+CANON_ORDER = CANON_BASE + IRR_CANONS  # full possible export order
 
 def build_alias_table() -> Dict[str, set]:
     table = {}
@@ -116,6 +123,13 @@ def build_clean_dataframe(df_raw: pd.DataFrame, raw_to_canon: Dict[str, str]) ->
     for raw, canon in raw_to_canon.items():
         canon_to_raw.setdefault(canon, raw)
 
+    #only export irrigaiton canons that are actually mapped
+    canon_order = CANON_BASE + [
+        f"irrigation{i}"
+        for i in range(1, MAX_IRRIGATION_ZONES + 1)
+        if f"Irrigation{i}" in canon_to_raw
+    ]
+
     data = {}
     for canon in CANON_ORDER:
         raw = canon_to_raw.get(canon)
@@ -152,14 +166,18 @@ def canon_select_ui(
     raw_cols: List[str],
     default_canon_to_raw: Dict[str, Optional[str]],
     form_key: str,
+    canon_list: List[str],
 ) -> Tuple[Dict[str, str], Dict[str, Optional[str]], List[str]]:
-    # Build "[##] ColName" labels for dropdowns
+    """
+    Builds the dropdown UI for selecting canonical columns.
+    canon_list controls which dropdowns appear (lets us show Irrigation1..N).
+    """
     labeled_cols, raw_to_label, label_to_raw = make_indexed_labels(raw_cols)
 
     options_all = ["(None)"] + labeled_cols
     canon_to_raw: Dict[str, Optional[str]] = {}
 
-    for canon in CANON_ORDER:
+    for canon in canon_list:
         default_raw = default_canon_to_raw.get(canon)
         default_label = raw_to_label.get(default_raw) if default_raw else None
         default_index = options_all.index(default_label) if default_label in options_all else 0
@@ -173,7 +191,7 @@ def canon_select_ui(
 
         canon_to_raw[canon] = None if sel_label == "(None)" else label_to_raw[sel_label]
 
-    # Build raw_to_canon (the mapping your cleaning uses)
+    # Build raw_to_canon (the mapping that cleaning uses)
     raw_to_canon: Dict[str, str] = {}
     used = set()
     duplicates = []
@@ -282,6 +300,27 @@ if (not new_upload_active) and (selected_file_id is not None):
             if not raw_cols:
                 st.warning("No raw column list was saved for this file; selections cannot be edited.")
             else:
+                # ---------- Irrigation UI state (Saved mapping editor) ----------
+                if "savedmap_irrig_count" not in st.session_state:
+                    # infer from saved mapping keys, default to 1
+                    inferred = 1
+                    for i in range(1, MAX_IRRIGATION_ZONES + 1):
+                        if (saved_canon_to_raw or {}).get(f"Irrigation{i}"):
+                            inferred = i
+                    st.session_state.savedmap_irrig_count = inferred
+
+                b1, b2 = st.columns([1, 1])
+                with b1:
+                    if st.button("Add irrigation zone", key="savedmap_add_irrig"):
+                        st.session_state.savedmap_irrig_count = min(
+                            MAX_IRRIGATION_ZONES, st.session_state.savedmap_irrig_count + 1
+                        )
+                with b2:
+                    if st.button("Remove irrigation zone", key="savedmap_rm_irrig"):
+                        st.session_state.savedmap_irrig_count = max(1, st.session_state.savedmap_irrig_count - 1)
+
+                canon_list_saved = CANON_BASE + [f"Irrigation{i}" for i in range(1, st.session_state.savedmap_irrig_count + 1)]
+
                 with st.form("edit_saved_mapping_form"):
                     st.caption(
                         "These selections are saved with this file and also used as your default mapping template for Quick Upload."
@@ -290,6 +329,7 @@ if (not new_upload_active) and (selected_file_id is not None):
                         raw_cols=raw_cols,
                         default_canon_to_raw=saved_canon_to_raw,
                         form_key="savedmap",
+                        canon_list=canon_list_saved,
                     )
                     save_map = st.form_submit_button("💾 Save mapping selections")
 
@@ -358,11 +398,32 @@ if uploaded is not None:
         "are used when they match this dataset."
     )
 
+    # ---------- Irrigation UI state (New upload) ----------
+    if "newupload_irrig_count" not in st.session_state:
+        inferred = 1
+        for i in range(1, MAX_IRRIGATION_ZONES + 1):
+            if (template or {}).get(f"Irrigation{i}"):
+                inferred = i
+        st.session_state.newupload_irrig_count = inferred
+
+    b1, b2 = st.columns([1, 1])
+    with b1:
+        if st.button("Add irrigation zone", key="newupload_add_irrig"):
+            st.session_state.newupload_irrig_count = min(
+                MAX_IRRIGATION_ZONES, st.session_state.newupload_irrig_count + 1
+            )
+    with b2:
+        if st.button("Remove irrigation zone", key="newupload_rm_irrig"):
+            st.session_state.newupload_irrig_count = max(1, st.session_state.newupload_irrig_count - 1)
+
+    canon_list_new = CANON_BASE + [f"Irrigation{i}" for i in range(1, st.session_state.newupload_irrig_count + 1)]
+
     with st.form("new_upload_mapping_form"):
         raw_to_canon, canon_to_raw, duplicates = canon_select_ui(
             raw_cols=raw_cols,
             default_canon_to_raw=default_canon_to_raw,
             form_key="newupload",
+            canon_list=canon_list_new,
         )
         submitted = st.form_submit_button("✅ Generate cleaned file and save to Neon")
 

@@ -48,6 +48,10 @@ DEFAULT_TARGET_DLI = 8.0      # mol m⁻² d⁻¹
 DEFAULT_TARGET_VPD_LOW = 0.2
 DEFAULT_TARGET_VPD_HIGH = 0.8
 
+# IRRIGATION EVENT DETECTION 
+DEFAULT_IRRIGATION_TRIGGER = 1.0    #irrigation ON when value >= this
+DEFAULT_IRRIGATION_MIN_INTERVAL_MIN = 7.0   #minimum minutes between counted events
+
 # ---------------------------------------------------------
 # Load per-user settings from DB
 # ---------------------------------------------------------
@@ -69,6 +73,9 @@ target_dli = float(settings.get("target_dli", DEFAULT_TARGET_DLI))
 
 target_vpd_low = float(settings.get("target_vpd_low", DEFAULT_TARGET_VPD_LOW))
 target_vpd_high = float(settings.get("target_vpd_high", DEFAULT_TARGET_VPD_HIGH))
+
+irrigation_trigger = float(settings.get("irrigation_trigger", DEFAULT_IRRIGATION_TRIGGER))
+irrigation_min_interval_min = float(settings.get("irrigation_min_interval_min", DEFAULT_IRRIGATION_MIN_INTERVAL_MIN))
 
 # ---------------------------------------------------------
 # UI helpers for unit labels <-> codes
@@ -259,6 +266,41 @@ with st.form("settings_form"):
             format="%.2f",
             help="Upper bound of your desired VPD band.",
         )
+    
+    # =====================================================
+    # IRRIGATION SECTION
+    # =====================================================
+    st.markdown("---")
+    st.subheader("Irrigation")
+    st.caption(
+        "These settings control how EnDash converts irrigation signals into ON/OFF states "
+        "and how it counts irrigation events per day."
+    )
+
+    col_it, col_gap = st.columns(2)
+
+    with col_it:
+        irrigation_trigger_input = st.number_input(
+            "Irrigation Trigger (ON when value ≥ trigger)",
+            value=float(irrigation_trigger),
+            min_value=1.0,      # per your requirement: default and minimum >= 1
+            step=1.0,
+            format="%.0f",
+            help="Your irrigation column is numeric: 0 = off, values ≥ trigger = on.",
+        )
+
+    with col_gap:
+        irrigation_min_interval_input = st.number_input(
+            "Minimum Time Between Irrigation Events (minutes)",
+            value=float(irrigation_min_interval_min),
+            min_value=0.0,
+            step=1.0,
+            format="%.0f",
+            help=(
+                "Prevents counting the same irrigation run multiple times when it spans "
+                "multiple logging steps (e.g., 12:30 and 12:31)."
+            ),
+        )
 
     save_btn = st.form_submit_button("💾 Save settings")
 
@@ -292,6 +334,8 @@ if save_btn:
             target_dli=float(dli_input),
             target_vpd_low=float(vpd_low_input),
             target_vpd_high=float(vpd_high_input),
+            irrigation_trigger=float(irrigation_trigger_input),
+            irrigation_min_interval_min=float(irrigation_min_interval_input),
         )
 
         st.success("Your personal units and setpoints have been saved and will be used on the dashboard.")

@@ -119,8 +119,18 @@ ALIASES = {
         "quantumsensor",
         "quantumpar",
     ],
+    "Irrigation1": ["irrigation", "irrigation1", "irrigation_1", "irrig_1", "zone1", "valve1", "mist1"],
+    "Irrigation2": ["irrigation2", "irrigation_2", "irrig_2", "zone2", "valve2", "mist2"],
+    "Irrigation3": ["irrigation3", "irrigation_3", "irrig_3", "zone3", "valve3", "mist3"],
+    "Irrigation4": ["irrigation4", "irrigation_4", "irrig_4", "zone4", "valve4", "mist4"],
+    "Irrigation5": ["irrigation5", "irrigation_5", "irrig_5", "zone5", "valve5", "mist5"],
 }
-CANON_ORDER = ["Time", "AirTemp", "LeafTemp", "RH", "PAR"]
+
+MAX_IRRIGATION_ZONES = 5
+
+CANON_BASE = ["Time", "AirTemp", "LeafTemp", "RH", "PAR"]
+IRR_CANONS = [f"Irrigation{i}" for i in range(1, MAX_IRRIGATION_ZONES + 1)]
+CANON_ORDER = CANON_BASE + IRR_CANONS
 
 
 def build_alias_table():
@@ -189,6 +199,12 @@ def build_clean_dataframe(df_raw: pd.DataFrame, mapping: dict) -> pd.DataFrame:
     canon_to_raw = {}
     for raw, canon in mapping.items():
         canon_to_raw.setdefault(canon, raw)
+
+    canon_order = CANON_BASE + [
+        f"Irrigation{i}"
+        for i in range(1, MAX_IRRIGATION_ZONES + 1)
+        if f"Irrigation{i}" in canon_to_raw
+    ]
 
     data = {}
     for canon in CANON_ORDER:
@@ -389,6 +405,158 @@ def compute_daily_dli(df_light: pd.DataFrame) -> pd.Series | None:
     daily_series.index = pd.to_datetime(daily_series.index)
     daily_series.name = "DLI"
     return daily_series
+
+# ==========================================================
+# Irrigation helpers
+# ==========================================================
+_IRR_RE = re.compile(r"^Irrigation(\d+)$", re.IGNORECASE)
+
+def _sorted_irrigation_cols(cols: list[str]) -> list[str]:
+    """Sort Irrigation1, Irrigation2, ... numerically."""
+    def key(c: str):
+        m = _IRR_RE.match(str(c))
+        return int(m.group(1)) if m else 999
+    return sorted(cols, key=key)
+
+def find_full_days(time_s: pd.Series) -> list[pd.Timestamp]:
+    """
+    Identify "full days" of data using the same logic style as DLI:
+      - >= 20 hours span within the day
+      - >= 80% of expected samples (expected based on median logging interval)
+    Returns list of midnight timestamps (one per full day), sorted.
+    """
+    if time_s is None:
+        return []
+    t = pd.to_datetime(time_s, errors="coerce").dropna().sort_values()
+    if t.nunique() < 2:
+        return []
+
+    dt_sec = t.diff().dt.total_seconds().dropna()
+    if dt_sec.empty:
+        return []
+    median_dt = float(dt_sec.median())
+    if median_dt <= 0:
+        return []
+
+    seconds_per_day = 24.0 * 3600.0
+    df_t = pd.DataFrame({"Time": t})
+    df_t["Date"] = df_t["Time"].dt.date
+
+    full = []
+    for d, g in df_t.groupby("Date"):
+        n = len(g)
+        span_sec = (g["Time"].iloc[-1] - g["Time"].iloc[0]).total_seconds()
+        expected_n = seconds_per_day / median_dt
+
+        if span_sec >= 20.0 * 3600.0 and n >= 0.8 * expected_n:
+            full.append(pd.to_datetime(d))
+
+    return sorted(full)
+
+def detect_event_times(time_s: pd.Series, on_mask: pd.Series, min_gap_min: float) -> pd.DatetimeIndex:
+    """
+    Count irrigation events robustly:
+      - event candidate = rising edge (off -> on)
+      - then enforce min_gap_min between counted events so one long run
+        doesn't get counted multiple times across timesteps.
+    """
+    t = pd.to_datetime(time_s, errors="coerce")
+    on = on_mask.fillna(False).astype(bool)
+
+    rising = on & ~on.shift(1, fill_value=False)
+    cand = t[rising].dropna().sort_values()
+    if cand.empty:
+        return pd.DatetimeIndex([])
+
+    if min_gap_min <= 0:
+        return pd.DatetimeIndex(cand)
+
+    gap = pd.Timedelta(minutes=float(min_gap_min))
+    kept = [cand.iloc[0]]
+    last = kept[0]
+    for cur in cand.iloc[1:]:
+        if (cur - last) >= gap:
+            kept.append(cur)
+            last = cur
+
+    return pd.DatetimeIndex(kept)
+
+def compute_irrigation_events_per_day(
+    df_in: pd.DataFrame,
+    irrigation_cols: list[str],
+    trigger: float,
+    min_gap_min: float,
+) -> dict:
+    """
+    Returns:
+      {
+        "events_per_day": pd.Series indexed by day (Timestamp) with integer counts,
+        "full_days": list[Timestamp],
+        "day_to_plot": Timestamp|None,
+        "binary_any_day": pd.DataFrame with columns ["Time","IrrigationOn"] for day_to_plot
+      }
+    """
+    if "Time" not in df_in.columns or not irrigation_cols:
+        return {"events_per_day": None, "full_days": [], "day_to_plot": None, "binary_any_day": None}
+
+    dfw = df_in[["Time"] + irrigation_cols].copy()
+    dfw["Time"] = pd.to_datetime(dfw["Time"], errors="coerce")
+    dfw = dfw.dropna(subset=["Time"]).sort_values("Time")
+    if dfw.empty:
+        return {"events_per_day": None, "full_days": [], "day_to_plot": None, "binary_any_day": None}
+
+    full_days = find_full_days(dfw["Time"])
+    if not full_days:
+        return {"events_per_day": None, "full_days": [], "day_to_plot": None, "binary_any_day": None}
+
+    # --- Event detection (per zone, then summed) ---
+    all_event_times = []
+    for col in irrigation_cols:
+        sig = pd.to_numeric(dfw[col], errors="coerce").fillna(0.0)
+        on = sig >= float(trigger)
+        ev = detect_event_times(dfw["Time"], on, float(min_gap_min))
+        if len(ev) > 0:
+            all_event_times.append(pd.Series(ev))
+
+    if not all_event_times:
+        # Still return zeros for full days
+        events_per_day = pd.Series(
+            data=[0] * len(full_days),
+            index=pd.to_datetime(full_days),
+            name="IrrigationEventsPerDay",
+        )
+    else:
+        ev_all = pd.concat(all_event_times, ignore_index=True)
+        ev_all = pd.to_datetime(ev_all, errors="coerce").dropna()
+
+        counts = {}
+        for d in full_days:
+            counts[d] = int((ev_all.dt.date == d.date()).sum())
+
+        events_per_day = pd.Series(counts).sort_index()
+        events_per_day.name = "IrrigationEventsPerDay"
+
+    # --- Build a 0/1 ON/OFF time series for a representative full day (most recent) ---
+    day_to_plot = full_days[-1]
+    day_mask = dfw["Time"].dt.date == day_to_plot.date()
+
+    # Status-style binary (not event counts): ON if ANY zone is ON at that timestep
+    any_on = None
+    for col in irrigation_cols:
+        sig = pd.to_numeric(dfw.loc[day_mask, col], errors="coerce").fillna(0.0)
+        on = (sig >= float(trigger)).astype(int)
+        any_on = on if any_on is None else np.maximum(any_on, on)
+
+    binary_any_day = pd.DataFrame(
+        {"Time": dfw.loc[day_mask, "Time"].values, "IrrigationOn": any_on.values if any_on is not None else []}
+    )
+
+    return {
+        "events_per_day": events_per_day,
+        "full_days": full_days,
+        "day_to_plot": day_to_plot,
+        "binary_any_day": binary_any_day,
+    }
 
 # --- Small status badges (pills) used under metrics ---
 st.markdown(
@@ -660,6 +828,9 @@ target_dli = float(settings.get("target_dli", 10.0))
 target_vpd_low = float(settings.get("target_vpd_low", 0.2))
 target_vpd_high = float(settings.get("target_vpd_high", 1.5))
 
+irrigation_trigger = float(settings.get("irrigation_trigger", 1.0)) #ON if value >= trigger
+irrigation_min_interval_min = float(settings.get("irrigation_min_interval_min", 7.0))   #minutes
+
 # ----- Core series -----
 air_raw = df["AirTemp"].astype(float) if "AirTemp" in df.columns else None
 leaf_raw = df["LeafTemp"].astype(float) if "LeafTemp" in df.columns else None
@@ -860,153 +1031,169 @@ else:
 #        st.success(f"About **{temp_within_pct:.0f}%** of air temperature readings were within your target band.")
 
 # =========================
-# Summary table moved HERE
+# Summary Statistics
 # =========================
 st.subheader("Summary Statistics")
 
+# --- Identify irrigation canonical columns (Irrigation1..IrrigationN) ---
+irrigation_cols = _sorted_irrigation_cols(
+    [c for c in df_display.columns if _IRR_RE.match(str(c))] + ([c for c in df_display.columns if str(c).lower() == "irrigation"])
+)
+# Remove duplicates if both "Irrigation" and "Irrigation1" exist, etc.
+irrigation_cols = list(dict.fromkeys(irrigation_cols))
+
+# --- Compute irrigation events/day (uses peak/rising-edge + min-gap rule) ---
+irrig_stats = compute_irrigation_events_per_day(
+    df_display,
+    irrigation_cols=irrigation_cols,
+    trigger=irrigation_trigger,
+    min_gap_min=irrigation_min_interval_min,
+)
+
+events_per_day = irrig_stats.get("events_per_day", None)
+
+# Build the summary table from numeric columns EXCLUDING irrigation raw signals
 numeric_cols = df_display.select_dtypes(include="number").columns.tolist()
+numeric_cols = [c for c in numeric_cols if c not in irrigation_cols]
+
 summary = None
+summary_display = None
+summary_numeric = None
 
 if numeric_cols:
     summary = df_display[numeric_cols].agg(["min", "mean", "max"]).transpose()
     summary.rename(columns={"min": "Min", "mean": "Average", "max": "Max"}, inplace=True)
     summary.index = [pretty_label(c, temp_unit) for c in summary.index]
 
-    # Add DLI row if available
+    # ---- Add DLI row (if available) ----
     if daily_dli_series is not None and not daily_dli_series.empty:
         dli_row = pd.DataFrame(
-            {
-                "Min": [daily_dli_series.min()],
-                "Average": [daily_dli_series.mean()],
-                "Max": [daily_dli_series.max()],
-            },
+            {"Min": [daily_dli_series.min()], "Average": [daily_dli_series.mean()], "Max": [daily_dli_series.max()]},
             index=["Daily Light Integral (mol m⁻² d⁻¹)"],
         )
         summary = pd.concat([summary, dli_row], axis=0)
 
-        # --- Display formatting: per-row decimals + PPFD Min/Average as "-" ---
-        ppfd_label = "Light Intensity (PPFD - µmol m⁻² s⁻¹)"
-        dli_label = "Daily Light Integral (mol m⁻² d⁻¹)"
+    # ---- Add irrigation events/day row (min/avg/max across FULL DAYS only (or 0 if none)) ----
+    if events_per_day is not None and not events_per_day.empty:
+        irrig_row = pd.DataFrame(
+            {
+                "Min": [float(events_per_day.min())],
+                "Average": [float(events_per_day.mean())],
+                "Max": [float(events_per_day.max())],
+            },
+            index=["Irrigation Events per Day (#)"],
+        )
+        summary = pd.concat([summary, irrig_row], axis=0)
 
-        def row_format_spec(row_label: str) -> str:
-            # Customize these however you want
-            if "Relative Humidity" in row_label:
-                return "{:.0f}"
-            if "Vapor Pressure Deficit" in row_label:
-                return "{:.2f}"
-            if "Light Intensity" in row_label:
-                return "{:.0f}"
-            if "Daily Light Integral" in row_label:
-                return "{:.1f}"
-            if "Temperature" in row_label:
-                return "{:.0f}"
-            return "{:.1f}"  # default
+    # --- Display formatting: per-row decimals + PPFD Min/Average as "-" ---
+    ppfd_label = "Light Intensity (PPFD - µmol m⁻² s⁻¹)"
 
-        def fmt_cell(val, fmt: str) -> str:
-            if pd.isna(val):
-                return "-"
-            try:
-                return fmt.format(float(val))
-            except Exception:
-                return str(val)
-        
-        #Numeric for comparisons (color comparison to setpoints), String for display
-        summary_display = summary.copy().astype("object")
-        summary_numeric = summary.copy()
+    def row_format_spec(row_label: str) -> str:
+        if "Irrigation Events per Day" in row_label:
+            return "{:.0f}"
+        if "Relative Humidity" in row_label:
+            return "{:.0f}"
+        if "Vapor Pressure Deficit" in row_label:
+            return "{:.2f}"
+        if "Light Intensity" in row_label:
+            return "{:.0f}"
+        if "Daily Light Integral" in row_label:
+            return "{:.1f}"
+        if "Temperature" in row_label:
+            return "{:.0f}"
+        return "{:.1f}"
 
-        # Force PPFD Min/Average to be "-"
-        if ppfd_label in summary_display.index:
-            summary_display.loc[ppfd_label, "Min"] = np.nan
-            summary_display.loc[ppfd_label, "Average"] = np.nan
+    def fmt_cell(val, fmt: str) -> str:
+        if pd.isna(val):
+            return "-"
+        try:
+            return fmt.format(float(val))
+        except Exception:
+            return str(val)
 
-        # Convert to formatted strings (per-row format spec)
-        for idx in summary_display.index:
-            fmt = row_format_spec(str(idx))
-            for col in summary_display.columns:
-                # Keep the explicit "-" behavior for PPFD Min/Average
-                if idx == ppfd_label and col in ["Min", "Average"]:
-                    summary_display.at[idx, col] = "-"
-                else:
-                    summary_display.at[idx, col] = fmt_cell(summary_display.at[idx, col], fmt)
-        
-        # --- Cell coloring based on targets ---
-        def build_style_df(df_display: pd.DataFrame, df_numeric: pd.DataFrame) -> pd.DataFrame:
-            style = pd.DataFrame("", index=df_display.index, columns=df_display.columns)
+    summary_display = summary.copy().astype("object")
+    summary_numeric = summary.copy()
 
-            def set_color(i, j, color: str):
-                style.at[i, j] = f"color: {color};"
+    # Force PPFD Min/Average to be "-"
+    if ppfd_label in summary_display.index:
+        summary_display.loc[ppfd_label, "Min"] = np.nan
+        summary_display.loc[ppfd_label, "Average"] = np.nan
 
-            for row_label in df_display.index:
-                for col in df_display.columns:
-                    # Default: black
-                    color = "black"
+    for idx in summary_display.index:
+        fmt = row_format_spec(str(idx))
+        for col in summary_display.columns:
+            if idx == ppfd_label and col in ["Min", "Average"]:
+                summary_display.at[idx, col] = "-"
+            else:
+                summary_display.at[idx, col] = fmt_cell(summary_display.at[idx, col], fmt)
 
-                    # Handle non-numeric / "-" cells safely
-                    try:
-                        val = df_numeric.loc[row_label, col]
-                    except Exception:
-                        val = np.nan
+    # --- Cell coloring based on targets (irrigation stays black) ---
+    def build_style_df(df_disp: pd.DataFrame, df_num: pd.DataFrame) -> pd.DataFrame:
+        style = pd.DataFrame("", index=df_disp.index, columns=df_disp.columns)
 
-                    # If it's missing or explicitly "-", keep black
-                    if pd.isna(val):
-                        set_color(row_label, col, "black")
-                        continue
+        def set_color(i, j, color: str):
+            style.at[i, j] = f"color: {color};"
 
-                    # PPFD & DLI rule: blue only if BELOW setpoint, else black
-                    if row_label == ppfd_label:
-                        color = "blue" if float(val) < float(target_ppfd) else "black"
-                        set_color(row_label, col, color)
-                        continue
+        for row_label in df_disp.index:
+            for col in df_disp.columns:
+                try:
+                    val = df_num.loc[row_label, col]
+                except Exception:
+                    val = np.nan
 
-                    if "Daily Light Integral" in str(row_label):
-                        color = "blue" if float(val) < float(target_dli) else "black"
-                        set_color(row_label, col, color)
-                        continue
-
-                    # Temperature rows (Air + Leaf): blue below low, red above high, black within
-                    if "Temperature" in str(row_label):
-                        if float(val) < float(target_temp_low):
-                            color = "blue"
-                        elif float(val) > float(target_temp_high):
-                            color = "red"
-                        else:
-                            color = "black"
-                        set_color(row_label, col, color)
-                        continue
-
-                    # RH row
-                    if "Relative Humidity" in str(row_label):
-                        if float(val) < float(target_rh_low):
-                            color = "blue"
-                        elif float(val) > float(target_rh_high):
-                            color = "red"
-                        else:
-                            color = "black"
-                        set_color(row_label, col, color)
-                        continue
-
-                    # VPD rows (Air/Leaf VPD)
-                    if "Vapor Pressure Deficit" in str(row_label):
-                        if float(val) < float(target_vpd_low):
-                            color = "blue"
-                        elif float(val) > float(target_vpd_high):
-                            color = "red"
-                        else:
-                            color = "black"
-                        set_color(row_label, col, color)
-                        continue
-
-                    # Everything else: black
+                if pd.isna(val):
                     set_color(row_label, col, "black")
+                    continue
 
-            return style
+                # PPFD & DLI: blue only if BELOW setpoint, else black
+                if row_label == ppfd_label:
+                    set_color(row_label, col, "blue" if float(val) < float(target_ppfd) else "black")
+                    continue
 
-        style_df = build_style_df(summary_display, summary_numeric)
+                if "Daily Light Integral" in str(row_label):
+                    set_color(row_label, col, "blue" if float(val) < float(target_dli) else "black")
+                    continue
 
-        # Render styled table
-        styler = summary_display.style.apply(lambda _: style_df, axis=None)
-        st.dataframe(styler, width="stretch")
+                # Temperature rows
+                if "Temperature" in str(row_label):
+                    if float(val) < float(target_temp_low):
+                        set_color(row_label, col, "blue")
+                    elif float(val) > float(target_temp_high):
+                        set_color(row_label, col, "red")
+                    else:
+                        set_color(row_label, col, "black")
+                    continue
 
+                # RH row
+                if "Relative Humidity" in str(row_label):
+                    if float(val) < float(target_rh_low):
+                        set_color(row_label, col, "blue")
+                    elif float(val) > float(target_rh_high):
+                        set_color(row_label, col, "red")
+                    else:
+                        set_color(row_label, col, "black")
+                    continue
+
+                # VPD rows
+                if "Vapor Pressure Deficit" in str(row_label):
+                    if float(val) < float(target_vpd_low):
+                        set_color(row_label, col, "blue")
+                    elif float(val) > float(target_vpd_high):
+                        set_color(row_label, col, "red")
+                    else:
+                        set_color(row_label, col, "black")
+                    continue
+
+                # Everything else (including irrigation events/day): black
+                set_color(row_label, col, "black")
+
+        return style
+
+    style_df = build_style_df(summary_display, summary_numeric)
+    styler = summary_display.style.apply(lambda _: style_df, axis=None)
+    st.dataframe(styler, width="stretch")
+else:
+    st.info("No numeric columns found to summarize.")
 
 # =========================
 # Time Series (Dashboard graphs)
@@ -1141,17 +1328,47 @@ if "PAR" in numeric_cols:
     handles = h1 + h2
     labels  = l1 + l2
 
-    # Desired order: PPFD, Target PPFD, Target DLI, DLI  (edit if you want a different order)
-    order = [0, 1, 3, 2]  # <-- swap the last two
+    def _legend_sort_key(lbl: str) -> int:
+        """
+        Assign a priority so we can reorder legends robustly EVEN if some
+        items are missing (e.g., DLI not computed -> no DLI legend entries).
+        Desired order:
+        1) PPFD
+        2) Target PPFD
+        3) DLI
+        4) Target DLI
+        5) anything else
+        """
+        s = (lbl or "").lower()
 
-    handles = [handles[i] for i in order]
-    labels  = [labels[i] for i in order]
+        # PPFD line
+        if s.startswith("ppfd"):
+            return 10
+
+        # Target PPFD line
+        if "target ppfd" in s:
+            return 20
+
+        # Target DLI line
+        if "target dli" in s:
+            return 40
+
+        # DLI bars (non-target)
+        # (Make sure target DLI is caught above first)
+        if s.startswith("dli"):
+            return 30
+
+        return 99
+
+    # Sort by our key, but keep stable ordering among same-priority items
+    sorted_items = sorted(zip(handles, labels), key=lambda hl: _legend_sort_key(hl[1]))
+    handles_sorted, labels_sorted = zip(*sorted_items) if sorted_items else ([], [])
 
     ax1.legend(
-        handles, labels,
+        handles_sorted, labels_sorted,
         loc="upper center",
         bbox_to_anchor=(0.5, -0.33),
-        ncol=2,              # keep 2x2
+        ncol=2,          # keeps a compact layout; works for 2 or 4 items
         frameon=True,
         fontsize=9,
     )
@@ -1262,6 +1479,45 @@ for col in numeric_cols_no_par:
     st.pyplot(fig)
     plot_separator()
     figs_for_pdf.append(fig)
+
+# ----------------------------------------------------------
+# Irrigation plots
+# ----------------------------------------------------------
+if events_per_day is not None and not events_per_day.empty and use_time_axis:
+    # --- Plot 1: Irrigation Events per Day (bar chart for FULL days only) ---
+    fig_ir, ax_ir = plt.subplots(figsize=(8, 3))
+    ax_ir.set_title("Irrigation Events per Day (Full Days Only)")
+    ax_ir.set_ylabel("Events per day")
+
+    bar_x = events_per_day.index + pd.Timedelta(hours=12)
+    ax_ir.bar(bar_x, events_per_day.values, width=0.42, align="center")
+
+    ax_ir.set_xlabel("Date")
+    apply_time_axis_formatting(ax_ir, fig_ir, events_per_day.index)
+    st.pyplot(fig_ir)
+    plot_separator()
+    figs_for_pdf.append(fig_ir)
+
+    # --- Plot 2: Irrigation ON/OFF over a representative full day (binary 0/1) ---
+    day_df = irrig_stats.get("binary_any_day", None)
+    day_to_plot = irrig_stats.get("day_to_plot", None)
+
+    if day_df is not None and not day_df.empty and day_to_plot is not None:
+        fig_day, ax_day = plt.subplots(figsize=(8, 3))
+        ax_day.set_title(f"Irrigation ON/OFF (Binary) — {day_to_plot.date()}")
+        ax_day.set_ylabel("Irrigation (0=Off, 1=On)")
+        ax_day.set_xlabel("Time of day")
+
+        ax_day.step(day_df["Time"], day_df["IrrigationOn"], where="post", linewidth=1.5)
+        ax_day.set_ylim(-0.1, 1.1)
+
+        apply_time_axis_formatting(ax_day, fig_day, day_df["Time"])
+        st.pyplot(fig_day)
+        plot_separator()
+        figs_for_pdf.append(fig_day)
+
+# Ensure irrigation signal columns do NOT show up in the generic numeric plots
+numeric_cols_no_par = [c for c in numeric_cols_no_par if c not in irrigation_cols]
 
 # =========================
 # Download Dashboard button (replaces old Full Dashboard)

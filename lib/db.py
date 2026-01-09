@@ -69,7 +69,9 @@ def init_db() -> None:
             target_ppfd      REAL DEFAULT 150.0,
             target_dli       REAL DEFAULT 8.0,
             target_vpd_low   REAL DEFAULT 0.2,
-            target_vpd_high  REAL DEFAULT 0.8
+            target_vpd_high  REAL DEFAULT 0.8,
+            irrigation_trigger          REAL DEFAULT 1.0,
+            irrigation_min_interval_min REAL DEFAULT 7.0
         );
         """
     )
@@ -106,6 +108,10 @@ def init_db() -> None:
         cur.execute("ALTER TABLE settings ADD COLUMN target_vpd_low REAL DEFAULT 0.2;")
     if "target_vpd_high" not in existing_cols:
         cur.execute("ALTER TABLE settings ADD COLUMN target_vpd_high REAL DEFAULT 0.8;")
+    if "irrigation_trigger" not in existing_cols:
+        cur.execute("ALTER TABLE settings ADD COLUMN irrigation_trigger REAL DEFAULT 1.0;")
+    if "irrigation_min_interval_min" not in existing_cols:
+        cur.execute("ALTER TABLE settings ADD COLUMN irrigation_min_interval_min REAL DEFAULT 7.0;")
 
     # Persist Upload page state across sessions (last viewed file + mapping template)
     if "last_upload_file_id" not in existing_cols:
@@ -242,6 +248,8 @@ def update_settings(
     target_dli: float,
     target_vpd_low: float,
     target_vpd_high: float,
+    irrigation_trigger: float,
+    irrigation_min_interval_min: float,
 ) -> None:
     conn = get_conn()
     cur = conn.cursor()
@@ -259,7 +267,9 @@ def update_settings(
             target_ppfd = %s,
             target_dli = %s,
             target_vpd_low = %s,
-            target_vpd_high = %s
+            target_vpd_high = %s,
+            irrigation_trigger = %s,
+            irrigation_min_interval_min = %s
         WHERE user_id = %s;
         """,
         (
@@ -274,6 +284,8 @@ def update_settings(
             target_dli,
             target_vpd_low,
             target_vpd_high,
+            irrigation_trigger,
+            irrigation_min_interval_min,
             user_id,
         ),
     )
