@@ -1603,37 +1603,59 @@ LEAF_WETNESS_YLABEL = {
 
 # Use the SAME day as the existing Irrigation 24hr plot (day_to_plot)
 # NOTE: day_to_plot should already exist in your current irrigation section.
-if "LeafWetness" in df_display.columns and "day_to_plot" in locals():
+if use_time_axis and "LeafWetness" in df_display.columns and "day_to_plot" in locals():
     df_lw_day = df_display[df_display["Time"].dt.normalize() == day_to_plot].copy()
 
     if not df_lw_day.empty:
-        fig, ax = plt.subplots()
-        ax.plot(df_lw_day["Time"], df_lw_day["LeafWetness"], label="Leaf Wetness")
+        # Match the sizing/layout of the rest of the dashboard plots
+        fig_lw, ax_lw = plt.subplots(figsize=(8, 3))
 
-        # Event points
+        ax_lw.plot(df_lw_day["Time"], df_lw_day["LeafWetness"], label="Leaf Wetness")
+
+        # Event points (same timestamps as the computed LW event column)
         ev_mask = (df_lw_day[LEAF_WETNESS_EVENT_COL] == 1)
         if ev_mask.any():
-            ax.scatter(
+            ax_lw.scatter(
                 df_lw_day.loc[ev_mask, "Time"],
                 df_lw_day.loc[ev_mask, "LeafWetness"],
                 label="Irrigation Event (Leaf Wetness)",
-                zorder=5
+                color="tab:orange",
+                zorder=5,
             )
 
-        ax.set_title(f"Leaf Wetness (24hr) — {day_to_plot.date()}")
-        ax.set_xlabel("Time")
-        ax.set_ylabel(LEAF_WETNESS_YLABEL)
-        ax.legend()
-        st.pyplot(fig)
+        ax_lw.set_title(f"Leaf Wetness (24hr) — {day_to_plot.date()}")
+        ax_lw.set_xlabel("Time of day")                 # match irrigation plots
+        ax_lw.set_ylabel(LEAF_WETNESS_YLABEL)
+
+        # Match irrigation-style readable x-axis ticks (00:00, 02:00, ...)
+        apply_time_axis_formatting(ax_lw, fig_lw, df_lw_day["Time"])
+
+        # Keep legend consistent with other time-series plots
+        legend_below(ax_lw, fig_lw, ncol=2, y=-0.33)
+
+        st.pyplot(fig_lw)
+        plot_separator()
+        figs_for_pdf.append(fig_lw)
 
 # Bar chart: Irrigation Events (Leaf Wetness) per day across dataset (full days only)
 if leafwetness_daily_counts is not None and len(leafwetness_daily_counts) > 0:
-    fig, ax = plt.subplots()
-    ax.bar(leafwetness_daily_counts.index, leafwetness_daily_counts.values)
-    ax.set_title("Irrigation Events per Day (Leaf Wetness) — Full Days Only")
-    ax.set_xlabel("Day")
-    ax.set_ylabel("Events / day")
-    st.pyplot(fig)
+    fig_lw_bar, ax_lw_bar = plt.subplots(figsize=(8, 3))
+
+    # Match irrigation events/day bar placement: center bars on the day (midday)
+    x_bar = pd.to_datetime(leafwetness_daily_counts.index) + pd.Timedelta(hours=12)
+
+    ax_lw_bar.bar(x_bar, leafwetness_daily_counts.values, width=0.8, align="center")
+    ax_lw_bar.set_title("Irrigation Events per Day (Leaf Wetness) — Full Days Only")
+    ax_lw_bar.set_xlabel("Date")
+    ax_lw_bar.set_ylabel("Events per day")
+
+    # Match the date formatting used elsewhere (MM-DD for multi-day spans)
+    apply_time_axis_formatting(ax_lw_bar, fig_lw_bar, pd.to_datetime(leafwetness_daily_counts.index))
+
+    st.pyplot(fig_lw_bar)
+    plot_separator()
+    figs_for_pdf.append(fig_lw_bar)
+
 
 
 # =========================
