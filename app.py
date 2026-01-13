@@ -1634,8 +1634,73 @@ if use_time_axis and "LeafWetness" in df_display.columns and "day_to_plot" in lo
         legend_below(ax_lw, fig_lw, ncol=2, y=-0.33)
 
         st.pyplot(fig_lw)
+
+        # ------------------------------------------------------------
+        # NEW: Inline Leaf Wetness irrigation detection settings
+        # (Same intent as Settings page; saved per-user to DB and reruns)
+        # ------------------------------------------------------------
+        save_lw_settings = False
+        with st.form("lw_inline_settings_form", clear_on_submit=False):
+            st.markdown("##### Leaf wetness irrigation detection settings")
+            st.caption(
+                "These settings control how Leaf Wetness is converted into irrigation events "
+                "and will update the dashboard calculations/graphs after saving."
+            )
+
+            c1, c2 = st.columns(2)
+            with c1:
+                irrigation_sensitivity_pct_input = st.number_input(
+                    "Irrigation Sensitivity (%)",
+                    value=float(irrigation_sensitivity_pct),
+                    min_value=0.0,
+                    max_value=100.0,
+                    step=0.5,
+                    format="%.2f",
+                    help="If Leaf Wetness increases by at least this amount (percent points), an irrigation event is counted.",
+                    key="dash_irrigation_sensitivity_pct",
+                )
+
+            with c2:
+                lw_min_interval_input = st.number_input(
+                    "Minimum time between irrigation events (min)",
+                    value=float(leaf_wetness_min_interval_min),
+                    min_value=0.0,
+                    step=1.0,
+                    format="%.0f",
+                    help="Minimum minutes between counted irrigation events derived from Leaf Wetness.",
+                    key="dash_leaf_wetness_min_interval_min",
+                )
+
+            save_lw_settings = st.form_submit_button("💾 Save leaf wetness settings")
+
+        if save_lw_settings:
+            # db.update_settings requires ALL settings fields, so we pass existing values
+            # for everything except the two LW detection settings we’re editing here.
+            db.update_settings(
+                user["id"],
+                orig_temp_unit=orig_temp_unit,
+                orig_light_unit=orig_light_unit,
+                temp_unit=temp_unit,
+                target_low=float(target_temp_low),
+                target_high=float(target_temp_high),
+                target_rh_low=float(target_rh_low),
+                target_rh_high=float(target_rh_high),
+                target_ppfd=float(target_ppfd),
+                target_dli=float(target_dli),
+                target_vpd_low=float(target_vpd_low),
+                target_vpd_high=float(target_vpd_high),
+                irrigation_trigger=float(irrigation_trigger),
+                irrigation_min_interval_min=float(irrigation_min_interval_min),
+                leaf_wetness_unit=str(leaf_wetness_unit),
+                irrigation_sensitivity_pct=float(irrigation_sensitivity_pct_input),
+                leaf_wetness_min_interval_min=float(lw_min_interval_input),
+            )
+            st.success("Leaf wetness settings saved. Updating dashboard…")
+            st.rerun()
+
         plot_separator()
         figs_for_pdf.append(fig_lw)
+
 
 # Bar chart: Irrigation Events (Leaf Wetness) per day across dataset (full days only)
 if leafwetness_daily_counts is not None and len(leafwetness_daily_counts) > 0:

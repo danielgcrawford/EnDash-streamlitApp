@@ -143,7 +143,7 @@ with st.form("settings_form"):
         orig_temp_labels = list(TEMP_UNIT_OPTIONS.keys())
         orig_temp_idx = temp_unit_display_index(orig_temp_unit)
         orig_temp_choice = st.selectbox(
-            "Temperature original file units",
+            "Temperature",
             orig_temp_labels,
             index=orig_temp_idx,
             help="Units used by the temperature column(s) in your uploaded file.",
@@ -154,7 +154,7 @@ with st.form("settings_form"):
         light_labels = list(LIGHT_UNIT_OPTIONS.keys())
         light_idx = light_unit_display_index(orig_light_unit)
         light_choice = st.selectbox(
-            "Light original file units",
+            "Light",
             light_labels,
             index=light_idx,
             help="Units used by the light / PAR column in your uploaded file.",
@@ -168,7 +168,7 @@ with st.form("settings_form"):
             leaf_wetness_unit = "Percent"
 
         leaf_wetness_unit_input = st.selectbox(
-            "Leaf Wetness original file untis",
+            "Leaf Wetness",
             options=lw_options,
             index=lw_options.index(leaf_wetness_unit),
             help="Units used by the Leaf Wetness column in your uploaded file.",
