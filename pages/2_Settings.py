@@ -54,7 +54,8 @@ DEFAULT_IRRIGATION_MIN_INTERVAL_MIN = 7.0   #minimum minutes between counted eve
 
 # LEAF WETNESS IRRIGATION DETECTION
 DEFAULT_LEAF_WETNESS_UNIT = "Percent"
-DEFAULT_IRRIGATION_SENSITIVITY_PCT = 3.0    #when increase in LW >= this, irrigation is counted ON
+DEFAULT_IRRIGATION_SENSITIVITY_PCT = 5.0    #when increase in LW >= this, irrigation is counted ON
+DEFAULT_LEAF_WETNESS_MIN_INTERVAL_MIN = 7.0 #min minutes between counted irrigation events
 
 # ---------------------------------------------------------
 # Load per-user settings from DB
@@ -83,6 +84,7 @@ irrigation_min_interval_min = float(settings.get("irrigation_min_interval_min", 
 
 leaf_wetness_unit = settings.get("leaf_wetness_unit", DEFAULT_LEAF_WETNESS_UNIT)
 irrigation_sensitivity_pct = float(settings.get("irrigation_sensitivity_pct", DEFAULT_IRRIGATION_SENSITIVITY_PCT))
+leaf_wetness_min_interval_min = float(settings.get("leaf_wetness_min_interval_min", DEFAULT_LEAF_WETNESS_MIN_INTERVAL_MIN))
 
 # ---------------------------------------------------------
 # UI helpers for unit labels <-> codes
@@ -135,13 +137,13 @@ with st.form("settings_form"):
     # ------- Original Data File Units -------
     st.markdown("#### Original data file units")
 
-    col_orig_temp, col_orig_light = st.columns(2)
+    col_orig_temp, col_orig_light, col_orig_lw = st.columns(3)
 
     with col_orig_temp:
         orig_temp_labels = list(TEMP_UNIT_OPTIONS.keys())
         orig_temp_idx = temp_unit_display_index(orig_temp_unit)
         orig_temp_choice = st.selectbox(
-            "Temperature in data file",
+            "Temperature original file units",
             orig_temp_labels,
             index=orig_temp_idx,
             help="Units used by the temperature column(s) in your uploaded file.",
@@ -152,12 +154,25 @@ with st.form("settings_form"):
         light_labels = list(LIGHT_UNIT_OPTIONS.keys())
         light_idx = light_unit_display_index(orig_light_unit)
         light_choice = st.selectbox(
-            "Light in data file",
+            "Light original file units",
             light_labels,
             index=light_idx,
             help="Units used by the light / PAR column in your uploaded file.",
         )
         selected_orig_light_unit = LIGHT_UNIT_OPTIONS[light_choice]
+
+    with col_orig_lw:
+        lw_options = ["Percent", "Volts", "milliVolts"]
+
+        if leaf_wetness_unit in (None, "", "%") or leaf_wetness_unit not in lw_options:
+            leaf_wetness_unit = "Percent"
+
+        leaf_wetness_unit_input = st.selectbox(
+            "Leaf Wetness original file untis",
+            options=lw_options,
+            index=lw_options.index(leaf_wetness_unit),
+            help="Units used by the Leaf Wetness column in your uploaded file.",
+        )
 
     # ------- Desired Dashboard Units -------
     st.markdown("#### Desired dashboard units")
@@ -314,18 +329,19 @@ with st.form("settings_form"):
         "These settings control how EnDash converts Leaf Wetness into irrigation signals."
     )
 
-    col_lw, col_is = st.columns(2)
+    col_is, col_lw_gap = st.columns(2)
 
-    with col_lw:
-        lw_options = ["Percent", "Volts", "milliVolts"]
-        leaf_wetness_unit = settings.get("leaf_wetness_unit", "Percent")
-        if leaf_wetness_unit in (None, "", "%") or leaf_wetness_unit not in lw_options:
-           leaf_wetness_unit = "Percent"
-        
-        leaf_wetness_unit_input = st.selectbox(
-            "Leaf Wetness Units",
-            options=["Percent", "Volts", "milliVolts"],
-            index=lw_options.index(leaf_wetness_unit)
+    with col_lw_gap:
+        leaf_wetness_min_interval_input = st.number_input(
+            "Minimum Time Between Irrigation Events (minutes)",
+            value=float(leaf_wetness_min_interval_min),
+            min_value=0.0,
+            step=1.0,
+            format="%.0f",
+            help=(
+                "Prevents counting multiple Leaf Wetness spikes as separate irrigation events. "
+                "An event will only be counted if enough time has passed since the last event."
+            ),
         )
 
     with col_is:
@@ -335,8 +351,9 @@ with st.form("settings_form"):
             max_value=100.0,
             value=float(irrigation_sensitivity_pct),
             step=0.1,
-            help="Minimum percent rise in Leaf Wetness between consecutive readings to count an irrigation event."
+            help="Minimum percent rise in Leaf Wetness between consecutive readings to count an irrigation event.",
         )
+
     save_btn = st.form_submit_button("💾 Save settings")
 
 # ---------------------------------------------------------
@@ -373,6 +390,7 @@ if save_btn:
             irrigation_min_interval_min=float(irrigation_min_interval_input),
             leaf_wetness_unit=leaf_wetness_unit_input,
             irrigation_sensitivity_pct=float(irrigation_sensitivity_pct_input),
+            leaf_wetness_min_interval_min=float(leaf_wetness_min_interval_input),
         )
 
         st.success("Your personal units and setpoints have been saved and will be used on the dashboard.")

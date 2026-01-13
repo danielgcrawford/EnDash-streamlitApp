@@ -808,6 +808,7 @@ irrigation_min_interval_min = float(settings.get("irrigation_min_interval_min", 
 
 leaf_wetness_unit = settings.get("leaf_wetness_unit", "Percent")
 irrigation_sensitivity_pct = float(settings.get("irrigation_sensitivity_pct", 3.0))
+leaf_wetness_min_interval_min = float(settings.get("leaf_wetness_min_interval_min", 7.0))
 
 # ----- Core series -----
 air_raw = df["AirTemp"].astype(float) if "AirTemp" in df.columns else None
@@ -1033,19 +1034,49 @@ events_total = irrig_stats.get("events_total", None)       # Series (days)
 
 
 # --- Leaf Wetness Irrigation Calculations ---
+# Rule to count a Leaf Wetness irrigation event:
+#   1) current reading rises more than irrigation_sensitivity_pct (%) above previous reading, AND
+#   2) the event is at least leaf_wetness_min_interval_min minutes after the last counted LW event.
 LEAF_WETNESS_EVENT_COL = "IrrigationEvents_LeafWetness"
 
-if "LeafWetness" in df_display.columns:
-    lw = pd.to_numeric(df_display["LeafWetness"], errors="coerce")
-    prev = lw.shift(1)
+def detect_leaf_wetness_event_times(time_s: pd.Series, lw_s: pd.Series, sensitivity_pct: float, min_gap_min: float) -> pd.DatetimeIndex:
+    t = pd.to_datetime(time_s, errors="coerce")
+    lw = pd.to_numeric(lw_s, errors="coerce")
 
-    #Percent rise relative to previous reading: rise_pct=(current-prev)/prev*100
-    denom = prev.where(prev.abs() > 1e-9) #Prevent / by 0
+    prev = lw.shift(1)
+    denom = prev.where(prev.abs() > 1e-9)  # prevent divide-by-zero
     rise_pct = ((lw - prev) / denom) * 100.0
 
-    df_display[LEAF_WETNESS_EVENT_COL] = ((rise_pct > irrigation_sensitivity_pct) & rise_pct.notna()).astype(int)
-else:
-    df_display[LEAF_WETNESS_EVENT_COL] = 0
+    # Candidate events = sensitivity threshold exceeded
+    cand = t[(rise_pct > float(sensitivity_pct)) & rise_pct.notna()].dropna().sort_values()
+    if cand.empty:
+        return pd.DatetimeIndex([])
+
+    if float(min_gap_min) <= 0:
+        return pd.DatetimeIndex(cand)
+
+    gap = pd.Timedelta(minutes=float(min_gap_min))
+    kept = [cand.iloc[0]]
+    last = kept[0]
+    for cur in cand.iloc[1:]:
+        if (cur - last) >= gap:
+            kept.append(cur)
+            last = cur
+    return pd.DatetimeIndex(kept)
+
+# Build 0/1 event column
+df_display[LEAF_WETNESS_EVENT_COL] = 0
+if "LeafWetness" in df_display.columns and "Time" in df_display.columns:
+    lw_event_times = detect_leaf_wetness_event_times(
+        df_display["Time"],
+        df_display["LeafWetness"],
+        sensitivity_pct=irrigation_sensitivity_pct,
+        min_gap_min=leaf_wetness_min_interval_min,
+    )
+    if len(lw_event_times) > 0:
+        # mark rows whose timestamps match counted event times
+        df_display.loc[df_display["Time"].isin(lw_event_times), LEAF_WETNESS_EVENT_COL] = 1
+
 
 #Irrigation Events per Day Leaf Wetness
 leafwetness_daily_counts = None
@@ -1398,8 +1429,13 @@ if "PAR" in numeric_cols:
     plot_separator()
     figs_for_pdf.append(fig)
 
-    numeric_cols_no_par = [c for c in numeric_cols if c != "PAR"]
-    numeric_cols_no_par = [c for c in numeric_cols_no_par if c not in irrigation_cols]
+numeric_cols_no_par = [c for c in numeric_cols if c != "PAR"]
+numeric_cols_no_par = [c for c in numeric_cols_no_par if c not in irrigation_cols]
+LEAF_WETNESS_EXCLUDE = {
+    "LeafWetness",
+    "IrrigationEvents_LeafWetness",
+}
+numeric_cols_no_par = [c for c in numeric_cols_no_par if c not in LEAF_WETNESS_EXCLUDE]
 
 # ---------- Generic plots for remaining numeric columns ----------
 for col in numeric_cols_no_par:
