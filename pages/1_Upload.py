@@ -57,11 +57,12 @@ ALIASES = {
     "Irrigation3": ["irrigation3", "irrigation_3", "irrig_3", "zone3", "valve3", "mist3"],
     "Irrigation4": ["irrigation4", "irrigation_4", "irrig_4", "zone4", "valve4", "mist4"],
     "Irrigation5": ["irrigation5", "irrigation_5", "irrig_5", "zone5", "valve5", "mist5"],
+    "LeafWetness": ["leaf wetness", "leafwetness", "leaf_wetness", "lw","leaf wetness %", "leaf wetness (%)", "leaf wetness (v)"],
 }
 
 MAX_IRRIGATION_ZONES = 5
 
-CANON_BASE = ["Time", "AirTemp", "LeafTemp", "RH", "PAR"]
+CANON_BASE = ["Time", "AirTemp", "LeafTemp", "RH", "PAR","LeafWetness"]
 IRR_CANONS = [f"Irrigation{i}" for i in range(1, MAX_IRRIGATION_ZONES + 1)]
 CANON_ORDER = CANON_BASE + IRR_CANONS  # full possible export order
 

@@ -64,66 +64,17 @@ def normalize(s: str) -> str:
 
 
 ALIASES = {
-    "Time": [
-        "time",
-        "timestamp",
-        "date_time",
-        "datetime",
-        "recorded at",
-        "date.time",
-        "logtime",
-        "measurement_time",
-    ],
-    "AirTemp": [
-        "airtemp",
-        "air_temp",
-        "tair",
-        "t_air",
-        "ambient_temp",
-        "air temperature",
-        "air temperature (c)",
-        "ta_c",
-        "rhttemperature",
-        "RHT - Temperature",
-        "rhttemp",
-        "RHT-Temperature",
-    ],
-    "LeafTemp": [
-        "leaftemp",
-        "leaf_temp",
-        "tleaf",
-        "leaf temperature",
-        "canopy_temp",
-        "tc_leaf",
-        "leaf_t (c)",
-        "leaf_tc",
-    ],
-    "RH": [
-        "rel_hum",
-        "relative_humidity",
-        "humidity",
-        "rh (%)",
-        "rhhumidity",
-        "rht_humidity",
-        "rh_percent",
-    ],
-    "PAR": [
-        "par",
-        "ppfd",
-        "photosynthetically active radiation",
-        "par_umol",
-        "par (umol m-2 s-1)",
-        "par_umolm2s",
-        "quantum",
-        "quantum_sensor",
-        "quantumsensor",
-        "quantumpar",
-    ],
+    "Time": ["time", "timestamp", "date_time", "datetime", "recorded at", "date.time", "logtime", "measurement_time",],
+    "AirTemp": ["airtemp", "air_temp", "tair", "t_air", "ambient_temp", "air temperature", "air temperature (c)", "ta_c", "rhttemperature", "RHT - Temperature", "rhttemp", "RHT-Temperature",],
+    "LeafTemp": ["leaftemp", "leaf_temp", "tleaf", "leaf temperature", "canopy_temp", "tc_leaf", "leaf_t (c)", "leaf_tc",],
+    "RH": ["rel_hum", "relative_humidity", "humidity", "rh (%)", "rhhumidity", "rht_humidity", "rh_percent",],
+    "PAR": ["par", "ppfd", "photosynthetically active radiation", "par_umol", "par (umol m-2 s-1)", "par_umolm2s", "quantum", "quantum_sensor", "quantumsensor", "quantumpar",],
     "Irrigation1": ["irrigation", "irrigation1", "irrigation_1", "irrig_1", "zone1", "valve1", "mist1"],
     "Irrigation2": ["irrigation2", "irrigation_2", "irrig_2", "zone2", "valve2", "mist2"],
     "Irrigation3": ["irrigation3", "irrigation_3", "irrig_3", "zone3", "valve3", "mist3"],
     "Irrigation4": ["irrigation4", "irrigation_4", "irrig_4", "zone4", "valve4", "mist4"],
     "Irrigation5": ["irrigation5", "irrigation_5", "irrig_5", "zone5", "valve5", "mist5"],
+    "LeafWetness": ["leaf wetness", "leafwetness", "leaf_wetness", "lw","leaf wetness %", "leaf wetness (%)", "leaf wetness (v)"],
 }
 
 MAX_IRRIGATION_ZONES = 5
@@ -855,6 +806,9 @@ target_vpd_high = float(settings.get("target_vpd_high", 1.5))
 irrigation_trigger = float(settings.get("irrigation_trigger", 1.0)) #ON if value >= trigger
 irrigation_min_interval_min = float(settings.get("irrigation_min_interval_min", 7.0))   #minutes
 
+leaf_wetness_unit = settings.get("leaf_wetness_unit", "Percent")
+irrigation_sensitivity_pct = float(settings.get("irrigation_sensitivity_pct", 3.0))
+
 # ----- Core series -----
 air_raw = df["AirTemp"].astype(float) if "AirTemp" in df.columns else None
 leaf_raw = df["LeafTemp"].astype(float) if "LeafTemp" in df.columns else None
@@ -1077,6 +1031,34 @@ irrig_stats = compute_irrigation_events_per_day(
 events_by_zone = irrig_stats.get("events_by_zone", None)   # DataFrame (days x zones)
 events_total = irrig_stats.get("events_total", None)       # Series (days)
 
+
+# --- Leaf Wetness Irrigation Calculations ---
+LEAF_WETNESS_EVENT_COL = "IrrigationEvents_LeafWetness"
+
+if "LeafWetness" in df_display.columns:
+    lw = pd.to_numeric(df_display["LeafWetness"], errors="coerce")
+    prev = lw.shift(1)
+
+    #Percent rise relative to previous reading: rise_pct=(current-prev)/prev*100
+    denom = prev.where(prev.abs() > 1e-9) #Prevent / by 0
+    rise_pct = ((lw - prev) / denom) * 100.0
+
+    df_display[LEAF_WETNESS_EVENT_COL] = ((rise_pct > irrigation_sensitivity_pct) & rise_pct.notna()).astype(int)
+else:
+    df_display[LEAF_WETNESS_EVENT_COL] = 0
+
+#Irrigation Events per Day Leaf Wetness
+leafwetness_daily_counts = None
+if LEAF_WETNESS_EVENT_COL in df_display.columns and df_display[LEAF_WETNESS_EVENT_COL].sum() > 0:
+    full_days = find_full_days(df_display["Time"])  # existing helper you already use elsewhere
+    if full_days:
+        df_full = df_display[df_display["Time"].dt.normalize().isin(full_days)].copy()
+        daily = df_full[df_full[LEAF_WETNESS_EVENT_COL] == 1].groupby(df_full["Time"].dt.normalize()).size()
+
+        # Ensure every full day appears (0 if none)
+        leafwetness_daily_counts = daily.reindex(full_days, fill_value=0)
+
+
 # Build the summary table from numeric columns EXCLUDING irrigation raw signals
 numeric_cols = df_display.select_dtypes(include="number").columns.tolist()
 numeric_cols = [c for c in numeric_cols if c not in irrigation_cols]
@@ -1113,19 +1095,14 @@ if numeric_cols:
             )
             summary = pd.concat([summary, irrig_row], axis=0)
 
-        # Optional: total across zones
-        if events_total is not None and not events_total.empty:
-            tot = events_total.astype(float)
-            total_row = pd.DataFrame(
-                {
-                    "Min": [float(tot.min())],
-                    "Average": [float(tot.mean())],
-                    "Max": [float(tot.max())],
-                },
-                index=["Total Irrigation Events per Day (#)"],
-            )
-            summary = pd.concat([summary, total_row], axis=0)
-
+    # ---- Add Leaf Wetness irrigation events/day row ---
+    if leafwetness_daily_counts is not None and not leafwetness_daily_counts.empty:
+        lw_row = pd.DataFrame(
+            {"Min": [leafwetness_daily_counts.min()], "Average": [leafwetness_daily_counts.mean()], "Max": [leafwetness_daily_counts.max()]},
+            index=["Irrigation Events per Day (#) - Leaf Wetness"],
+        )
+        summary = pd.concat([summary, lw_row], axis=0)
+    
     # --- Display formatting: per-row decimals + PPFD Min/Average as "-" ---
     ppfd_label = "Light Intensity (PPFD - µmol m⁻² s⁻¹)"
 
@@ -1576,6 +1553,52 @@ if use_time_axis and events_by_zone is not None and not events_by_zone.empty:
             st.pyplot(fig_day)
             plot_separator()
             figs_for_pdf.append(fig_day)
+
+# ----------------------------------------------------------
+# Leaf Wetness + Irrigation Events (Leaf Wetness)
+# This is separate from the existing Irrigation ON/OFF event logic.
+# ----------------------------------------------------------
+
+LEAF_WETNESS_YLABEL = {
+    "Percent": "Leaf Wetness (%)",
+    "Volts": "Leaf Wetness (V)",
+    "milliVolts": "Leaf Wetness (mV)",
+}.get(leaf_wetness_unit, "Leaf Wetness")
+
+# Use the SAME day as the existing Irrigation 24hr plot (day_to_plot)
+# NOTE: day_to_plot should already exist in your current irrigation section.
+if "LeafWetness" in df_display.columns and "day_to_plot" in locals():
+    df_lw_day = df_display[df_display["Time"].dt.normalize() == day_to_plot].copy()
+
+    if not df_lw_day.empty:
+        fig, ax = plt.subplots()
+        ax.plot(df_lw_day["Time"], df_lw_day["LeafWetness"], label="Leaf Wetness")
+
+        # Event points
+        ev_mask = (df_lw_day[LEAF_WETNESS_EVENT_COL] == 1)
+        if ev_mask.any():
+            ax.scatter(
+                df_lw_day.loc[ev_mask, "Time"],
+                df_lw_day.loc[ev_mask, "LeafWetness"],
+                label="Irrigation Event (Leaf Wetness)",
+                zorder=5
+            )
+
+        ax.set_title(f"Leaf Wetness (24hr) — {day_to_plot.date()}")
+        ax.set_xlabel("Time")
+        ax.set_ylabel(LEAF_WETNESS_YLABEL)
+        ax.legend()
+        st.pyplot(fig)
+
+# Bar chart: Irrigation Events (Leaf Wetness) per day across dataset (full days only)
+if leafwetness_daily_counts is not None and len(leafwetness_daily_counts) > 0:
+    fig, ax = plt.subplots()
+    ax.bar(leafwetness_daily_counts.index, leafwetness_daily_counts.values)
+    ax.set_title("Irrigation Events per Day (Leaf Wetness) — Full Days Only")
+    ax.set_xlabel("Day")
+    ax.set_ylabel("Events / day")
+    st.pyplot(fig)
+
 
 # =========================
 # Download Dashboard button (replaces old Full Dashboard)

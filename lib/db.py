@@ -60,6 +60,7 @@ def init_db() -> None:
             orig_temp_unit   TEXT DEFAULT 'C',
             orig_light_unit  TEXT DEFAULT 'PPFD',
             temp_unit        TEXT DEFAULT 'F',
+            leaf_wetness_unit   TEXT DEFAULT 'Percent',
 
             -- TARGETS
             target_low       REAL DEFAULT 65.0,
@@ -71,7 +72,8 @@ def init_db() -> None:
             target_vpd_low   REAL DEFAULT 0.2,
             target_vpd_high  REAL DEFAULT 0.8,
             irrigation_trigger          REAL DEFAULT 1.0,
-            irrigation_min_interval_min REAL DEFAULT 7.0
+            irrigation_min_interval_min REAL DEFAULT 7.0,
+            irrigation_sensitivity_pct  REAL DEFAULT 3.0
         );
         """
     )
@@ -112,6 +114,10 @@ def init_db() -> None:
         cur.execute("ALTER TABLE settings ADD COLUMN irrigation_trigger REAL DEFAULT 1.0;")
     if "irrigation_min_interval_min" not in existing_cols:
         cur.execute("ALTER TABLE settings ADD COLUMN irrigation_min_interval_min REAL DEFAULT 7.0;")
+    if "leaf_wetness_unit" not in existing_cols:
+        cur.execute("ALTER TABLE settings ADD COLUMN leaf_wetness_unit TEXT DEFAULT 'Percent';")
+    if "irrigation_sensitivity_pct" not in existing_cols:
+        cur.execute("ALTER TABLE settings ADD COLUMN irrigation_sensitivity_pct REAL DEFAULT 3.0;")
 
     # Persist Upload page state across sessions (last viewed file + mapping template)
     if "last_upload_file_id" not in existing_cols:
@@ -250,6 +256,8 @@ def update_settings(
     target_vpd_high: float,
     irrigation_trigger: float,
     irrigation_min_interval_min: float,
+    leaf_wetness_unit: str,
+    irrigation_sensitivity_pct: float,
 ) -> None:
     conn = get_conn()
     cur = conn.cursor()
@@ -269,7 +277,9 @@ def update_settings(
             target_vpd_low = %s,
             target_vpd_high = %s,
             irrigation_trigger = %s,
-            irrigation_min_interval_min = %s
+            irrigation_min_interval_min = %s,
+            leaf_wetness_unit = %s,
+            irrigation_sensitivity_pct = %s
         WHERE user_id = %s;
         """,
         (
@@ -286,6 +296,8 @@ def update_settings(
             target_vpd_high,
             irrigation_trigger,
             irrigation_min_interval_min,
+            leaf_wetness_unit,
+            irrigation_sensitivity_pct,
             user_id,
         ),
     )

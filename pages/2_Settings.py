@@ -52,6 +52,10 @@ DEFAULT_TARGET_VPD_HIGH = 0.8
 DEFAULT_IRRIGATION_TRIGGER = 1.0    #irrigation ON when value >= this
 DEFAULT_IRRIGATION_MIN_INTERVAL_MIN = 7.0   #minimum minutes between counted events
 
+# LEAF WETNESS IRRIGATION DETECTION
+DEFAULT_LEAF_WETNESS_UNIT = "Percent"
+DEFAULT_IRRIGATION_SENSITIVITY_PCT = 3.0    #when increase in LW >= this, irrigation is counted ON
+
 # ---------------------------------------------------------
 # Load per-user settings from DB
 # ---------------------------------------------------------
@@ -76,6 +80,9 @@ target_vpd_high = float(settings.get("target_vpd_high", DEFAULT_TARGET_VPD_HIGH)
 
 irrigation_trigger = float(settings.get("irrigation_trigger", DEFAULT_IRRIGATION_TRIGGER))
 irrigation_min_interval_min = float(settings.get("irrigation_min_interval_min", DEFAULT_IRRIGATION_MIN_INTERVAL_MIN))
+
+leaf_wetness_unit = settings.get("leaf_wetness_unit", DEFAULT_LEAF_WETNESS_UNIT)
+irrigation_sensitivity_pct = float(settings.get("irrigation_sensitivity_pct", DEFAULT_IRRIGATION_SENSITIVITY_PCT))
 
 # ---------------------------------------------------------
 # UI helpers for unit labels <-> codes
@@ -274,7 +281,7 @@ with st.form("settings_form"):
     st.subheader("Irrigation")
     st.caption(
         "These settings control how EnDash converts irrigation signals into ON/OFF states "
-        "and how it counts irrigation events per day."
+        "and how it calculates water applied per day."
     )
 
     col_it, col_gap = st.columns(2)
@@ -283,9 +290,9 @@ with st.form("settings_form"):
         irrigation_trigger_input = st.number_input(
             "Irrigation Trigger (ON when value ≥ trigger)",
             value=float(irrigation_trigger),
-            min_value=1.0,      # per your requirement: default and minimum >= 1
-            step=1.0,
-            format="%.0f",
+            min_value=0.1,      # per your requirement: default and minimum >= 1
+            step=0.1,
+            format="%.1f",
             help="Your irrigation column is numeric: 0 = off, values ≥ trigger = on.",
         )
 
@@ -302,6 +309,34 @@ with st.form("settings_form"):
             ),
         )
 
+    st.subheader("Leaf Wetness")
+    st.caption(
+        "These settings control how EnDash converts Leaf Wetness into irrigation signals."
+    )
+
+    col_lw, col_is = st.columns(2)
+
+    with col_lw:
+        lw_options = ["Percent", "Volts", "milliVolts"]
+        leaf_wetness_unit = settings.get("leaf_wetness_unit", "Percent")
+        if leaf_wetness_unit in (None, "", "%") or leaf_wetness_unit not in lw_options:
+           leaf_wetness_unit = "Percent"
+        
+        leaf_wetness_unit_input = st.selectbox(
+            "Leaf Wetness Units",
+            options=["Percent", "Volts", "milliVolts"],
+            index=lw_options.index(leaf_wetness_unit)
+        )
+
+    with col_is:
+        irrigation_sensitivity_pct_input = st.number_input(
+            "Irrigation Sensitivity (%)",
+            min_value=0.0,
+            max_value=100.0,
+            value=float(irrigation_sensitivity_pct),
+            step=0.1,
+            help="Minimum percent rise in Leaf Wetness between consecutive readings to count an irrigation event."
+        )
     save_btn = st.form_submit_button("💾 Save settings")
 
 # ---------------------------------------------------------
@@ -336,6 +371,8 @@ if save_btn:
             target_vpd_high=float(vpd_high_input),
             irrigation_trigger=float(irrigation_trigger_input),
             irrigation_min_interval_min=float(irrigation_min_interval_input),
+            leaf_wetness_unit=leaf_wetness_unit_input,
+            irrigation_sensitivity_pct=float(irrigation_sensitivity_pct_input),
         )
 
         st.success("Your personal units and setpoints have been saved and will be used on the dashboard.")
