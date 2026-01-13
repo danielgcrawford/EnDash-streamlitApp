@@ -311,6 +311,34 @@ def update_settings(
     cur.close()
     conn.close()
 
+def update_leaf_wetness_event_settings(
+    user_id: int,
+    *,
+    irrigation_sensitivity_pct: float,
+    leaf_wetness_min_interval_min: float,
+) -> None:
+    """
+    Update ONLY the Leaf Wetness -> Irrigation Event detection settings.
+    Does not touch any other settings fields.
+    Uses UPSERT so it works even if the settings row doesn't exist yet.
+    """
+    conn = get_conn()
+    cur = conn.cursor()
+    cur.execute(
+        """
+        INSERT INTO settings (user_id, irrigation_sensitivity_pct, leaf_wetness_min_interval_min)
+        VALUES (%s, %s, %s)
+        ON CONFLICT (user_id) DO UPDATE
+        SET
+            irrigation_sensitivity_pct = EXCLUDED.irrigation_sensitivity_pct,
+            leaf_wetness_min_interval_min = EXCLUDED.leaf_wetness_min_interval_min;
+        """,
+        (user_id, irrigation_sensitivity_pct, leaf_wetness_min_interval_min),
+    )
+    conn.commit()
+    cur.close()
+    conn.close()
+
 
 # -------- Files (cleaned CSVs in Neon) --------
 

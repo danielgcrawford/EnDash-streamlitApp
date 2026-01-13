@@ -1636,7 +1636,7 @@ if use_time_axis and "LeafWetness" in df_display.columns and "day_to_plot" in lo
         st.pyplot(fig_lw)
 
         # ------------------------------------------------------------
-        # NEW: Inline Leaf Wetness irrigation detection settings
+        # Inline Leaf Wetness irrigation detection settings
         # (Same intent as Settings page; saved per-user to DB and reruns)
         # ------------------------------------------------------------
         save_lw_settings = False
@@ -1652,9 +1652,9 @@ if use_time_axis and "LeafWetness" in df_display.columns and "day_to_plot" in lo
                 irrigation_sensitivity_pct_input = st.number_input(
                     "Irrigation Sensitivity (%)",
                     value=float(irrigation_sensitivity_pct),
-                    min_value=0.0,
+                    min_value=0.1,
                     max_value=100.0,
-                    step=0.5,
+                    step=0.1,
                     format="%.2f",
                     help="If Leaf Wetness increases by at least this amount (percent points), an irrigation event is counted.",
                     key="dash_irrigation_sensitivity_pct",
@@ -1674,24 +1674,9 @@ if use_time_axis and "LeafWetness" in df_display.columns and "day_to_plot" in lo
             save_lw_settings = st.form_submit_button("💾 Save leaf wetness settings")
 
         if save_lw_settings:
-            # db.update_settings requires ALL settings fields, so we pass existing values
-            # for everything except the two LW detection settings we’re editing here.
-            db.update_settings(
+            # Updates only leaf wetness detection settings
+            db.update_leaf_wetness_event_settings(
                 user["id"],
-                orig_temp_unit=orig_temp_unit,
-                orig_light_unit=orig_light_unit,
-                temp_unit=temp_unit,
-                target_low=float(target_temp_low),
-                target_high=float(target_temp_high),
-                target_rh_low=float(target_rh_low),
-                target_rh_high=float(target_rh_high),
-                target_ppfd=float(target_ppfd),
-                target_dli=float(target_dli),
-                target_vpd_low=float(target_vpd_low),
-                target_vpd_high=float(target_vpd_high),
-                irrigation_trigger=float(irrigation_trigger),
-                irrigation_min_interval_min=float(irrigation_min_interval_min),
-                leaf_wetness_unit=str(leaf_wetness_unit),
                 irrigation_sensitivity_pct=float(irrigation_sensitivity_pct_input),
                 leaf_wetness_min_interval_min=float(lw_min_interval_input),
             )
