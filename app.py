@@ -674,7 +674,15 @@ if quick_file is not None:
             # 3) Build cleaned dataframe
             df_clean = build_clean_dataframe(df_raw, mapping_to_use)
 
-            ...
+            # Build stored filename: "<OriginalFilename>_<Username>.csv"
+            uname = username_slug(user)
+
+            orig_stem = Path(original_name).stem
+            orig_stem = re.sub(r"\s+", "_", orig_stem)
+            orig_stem = re.sub(r"[^A-Za-z0-9_-]+", "", orig_stem)
+            orig_stem = re.sub(r"_+", "_", orig_stem).strip("_") or "file"
+
+            stored_filename = f"{orig_stem}_{uname}.csv"
 
             cleaned_bytes = df_clean.to_csv(index=False).encode("utf-8")
             file_db_id = db.add_file_record(user["id"], stored_filename, cleaned_bytes)

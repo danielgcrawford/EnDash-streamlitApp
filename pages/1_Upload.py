@@ -44,14 +44,10 @@ def normalize(s: str) -> str:
 
 ALIASES = {
     "Time": ["time", "timestamp", "date_time", "datetime", "recorded at", "date.time", "logtime", "measurement_time"],
-    "AirTemp": [
-        "airtemp", "air_temp", "tair", "t_air", "ambient_temp", "air temperature", "air temperature (c)",
-        "ta_c", "rhttemperature", "RHT - Temperature", "rhttemp", "RHT-Temperature"],
+    "AirTemp": ["airtemp", "air_temp", "tair", "t_air", "ambient_temp", "air temperature", "air temperature (c)", "ta_c", "rhttemperature", "RHT - Temperature", "rhttemp", "RHT-Temperature"],
     "LeafTemp": ["leaftemp", "leaf_temp", "tleaf", "leaf temperature", "canopy_temp", "tc_leaf", "leaf_t (c)", "leaf_tc"],
     "RH": ["rel_hum", "relative_humidity", "humidity", "rh (%)", "rhhumidity", "rht_humidity", "rh_percent"],
-    "PAR": [
-        "par", "ppfd", "photosynthetically active radiation", "par_umol", "par (umol m-2 s-1)", "par_umolm2s",
-        "quantum", "quantum_sensor", "quantumsensor", "quantumpar"],
+    "PAR": ["par", "ppfd", "photosynthetically active radiation", "par_umol", "par (umol m-2 s-1)", "par_umolm2s", "quantum", "quantum_sensor", "quantumsensor", "quantumpar"],
     "Irrigation1": ["irrigation", "irrigation1", "irrigation_1", "irrig_1", "zone1", "valve1", "mist1"],
     "Irrigation2": ["irrigation2", "irrigation_2", "irrig_2", "zone2", "valve2", "mist2"],
     "Irrigation3": ["irrigation3", "irrigation_3", "irrig_3", "zone3", "valve3", "mist3"],
@@ -452,7 +448,13 @@ if uploaded is not None:
             data_start_str = time.strftime("%Y%m%dT%H%M", time.gmtime())
 
         uname = username_slug(user)
-        stored_filename = f"{uname}_{data_start_str}.csv"
+
+        orig_stem = Path(uploaded.name).stem
+        orig_stem = re.sub(r"\s+", "_", orig_stem)
+        orig_stem = re.sub(r"[^A-Za-z0-9_-]+", "", orig_stem)
+        orig_stem = re.sub(r"_+", "_", orig_stem).strip("_") or "file"
+
+        stored_filename = f"{orig_stem}_{uname}.csv"
 
         cleaned_bytes = df_clean.to_csv(index=False).encode("utf-8")
         file_id = db.add_file_record(user["id"], stored_filename, cleaned_bytes)
