@@ -1611,20 +1611,32 @@ LEAF_WETNESS_YLABEL = {
     "milliVolts": "Leaf Wetness (mV)",
 }.get(leaf_wetness_unit, "Leaf Wetness")
 
-# Use the SAME day as the existing Irrigation 24hr plot (day_to_plot)
-# NOTE: day_to_plot should already exist in your current irrigation section.
-if use_time_axis and "LeafWetness" in df_display.columns and "day_to_plot" in locals():
-    df_lw_day = df_display[df_display["Time"].dt.normalize() == day_to_plot].copy()
+# Choose a "day to plot" for leaf wetness EVEN if no irrigation zones exist.
+# Priority:
+#   1) use day_to_plot from irrigation section (if it exists),
+#   2) else use the most recent "full day" in the dataset,
+#   3) else fall back to the most recent date present.
+day_to_plot_lw = None
+if "day_to_plot" in locals() and day_to_plot is not None:
+    day_to_plot_lw = pd.to_datetime(day_to_plot)
+elif use_time_axis and "Time" in df_display.columns and df_display["Time"].notna().any():
+    full_days_lw = find_full_days(df_display["Time"])
+    if full_days_lw:
+        day_to_plot_lw = pd.to_datetime(full_days_lw[-1])
+    else:
+        day_to_plot_lw = pd.to_datetime(df_display["Time"].max()).normalize()
+
+if use_time_axis and "LeafWetness" in df_display.columns and day_to_plot_lw is not None:
+    df_lw_day = df_display[df_display["Time"].dt.normalize() == day_to_plot_lw.normalize()].copy()
 
     if not df_lw_day.empty:
-        # Match the sizing/layout of the rest of the dashboard plots
         fig_lw, ax_lw = plt.subplots(figsize=(8, 3))
 
         ax_lw.plot(df_lw_day["Time"], df_lw_day["LeafWetness"], label="Leaf Wetness")
 
         # Event points (same timestamps as the computed LW event column)
-        ev_mask = (df_lw_day[LEAF_WETNESS_EVENT_COL] == 1)
-        if ev_mask.any():
+        ev_mask = (df_lw_day[LEAF_WETNESS_EVENT_COL] == 1) if LEAF_WETNESS_EVENT_COL in df_lw_day.columns else None
+        if ev_mask is not None and ev_mask.any():
             ax_lw.scatter(
                 df_lw_day.loc[ev_mask, "Time"],
                 df_lw_day.loc[ev_mask, "LeafWetness"],
@@ -1633,14 +1645,11 @@ if use_time_axis and "LeafWetness" in df_display.columns and "day_to_plot" in lo
                 zorder=5,
             )
 
-        ax_lw.set_title(f"Leaf Wetness (24hr) — {day_to_plot.date()}")
-        ax_lw.set_xlabel("Time of day")                 # match irrigation plots
+        ax_lw.set_title(f"Leaf Wetness (24hr) — {day_to_plot_lw.date()}")
+        ax_lw.set_xlabel("Time of day")
         ax_lw.set_ylabel(LEAF_WETNESS_YLABEL)
 
-        # Match irrigation-style readable x-axis ticks (00:00, 02:00, ...)
         apply_time_axis_formatting(ax_lw, fig_lw, df_lw_day["Time"])
-
-        # Keep legend consistent with other time-series plots
         legend_below(ax_lw, fig_lw, ncol=2, y=-0.33)
 
         st.pyplot(fig_lw)
