@@ -1101,6 +1101,8 @@ if LEAF_WETNESS_EVENT_COL in df_display.columns and df_display[LEAF_WETNESS_EVEN
 # Build the summary table from numeric columns EXCLUDING irrigation raw signals
 numeric_cols = df_display.select_dtypes(include="number").columns.tolist()
 numeric_cols = [c for c in numeric_cols if c not in irrigation_cols]
+# do not show the 0/1 leaf-wetness event marker column in Summary Statistics
+numeric_cols = [c for c in numeric_cols if c != LEAF_WETNESS_EVENT_COL]
 
 summary = None
 summary_display = None
