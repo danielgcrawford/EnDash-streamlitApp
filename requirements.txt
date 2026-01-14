@@ -4,3 +4,6 @@ bcrypt==3.2.2
 pandas
 matplotlib
 psycopg2-binary
+
+openpyxl
+xlrd==2.0.1
