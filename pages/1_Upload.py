@@ -11,6 +11,8 @@ import streamlit as st
 
 from lib import auth, db
 
+import csv
+from io import StringIO
 
 # Adding numbers to column names
 def make_indexed_labels(raw_cols: List[str]) -> Tuple[List[str], Dict[str, str], Dict[str, str]]:
@@ -54,13 +56,19 @@ ALIASES = {
     "Irrigation4": ["irrigation4", "irrigation_4", "irrig_4", "zone4", "valve4", "mist4"],
     "Irrigation5": ["irrigation5", "irrigation_5", "irrig_5", "zone5", "valve5", "mist5"],
     "LeafWetness": ["leaf wetness", "leafwetness", "leaf_wetness", "lw","leaf wetness %", "leaf wetness (%)", "leaf wetness (v)"],
+    "Date": ["date", "day", "log_date", "recorded_date"],
+    "TimeOfDay": ["time_of_day", "clock", "clock_time", "timeofday", "time only", "time_only"],
 }
 
 MAX_IRRIGATION_ZONES = 5
 
-CANON_BASE = ["Time", "AirTemp", "LeafTemp", "RH", "PAR","LeafWetness"]
+# What we *output* in the cleaned CSV
+CANON_OUTPUT_BASE = ["Time", "AirTemp", "LeafTemp", "RH", "PAR", "LeafWetness"]
 IRR_CANONS = [f"Irrigation{i}" for i in range(1, MAX_IRRIGATION_ZONES + 1)]
-CANON_ORDER = CANON_BASE + IRR_CANONS  # full possible export order
+CANON_OUTPUT_ORDER = CANON_OUTPUT_BASE + IRR_CANONS
+
+# What we show in the mapping UI (includes optional Date/TimeOfDay)
+CANON_UI_BASE = ["Time", "Date", "TimeOfDay", "AirTemp", "LeafTemp", "RH", "PAR", "LeafWetness"]
 
 def build_alias_table() -> Dict[str, set]:
     table = {}
@@ -95,22 +103,169 @@ def map_columns(raw_cols: List[str], alias_table: Dict[str, set]) -> Tuple[Dict[
     extras = [c for c in raw_cols if c not in mapping]
     return mapping, missing, extras
 
+def _score_header_candidate(values: List[object], alias_table: Dict[str, set]) -> float:
+    """
+    Score a row as a potential header row.
+    Heuristics:
+      - more non-empty string-like cells is better
+      - more unique cells is better
+      - cells that match known alias tokens (time/date/temp/rh/par/etc) boost score
+    """
+    cleaned = []
+    for v in values:
+        if pd.isna(v):
+            continue
+        s = str(v).strip()
+        if not s or s.lower().startswith("unnamed"):
+            continue
+        cleaned.append(s)
 
-def load_table_from_bytes(file_bytes: bytes, ext: str) -> Tuple[pd.DataFrame, str, Optional[str]]:
+    if len(cleaned) < 2:
+        return -1.0
+
+    uniq_ratio = len(set(cleaned)) / max(len(cleaned), 1)
+
+    # alias hits: any cell that normalizes to something we know
+    alias_norms = set().union(*alias_table.values())
+    hits = sum(1 for s in cleaned if normalize(s) in alias_norms)
+
+    # small boost if row contains at least one "date" and one "time"-ish token
+    norms = [normalize(s) for s in cleaned]
+    has_date = any(n in ("date", "day") or "date" in n for n in norms)
+    has_time = any(n == "time" or "time" in n for n in norms)
+
+    score = 0.0
+    score += len(cleaned) * 1.0
+    score += uniq_ratio * 2.0
+    score += hits * 5.0
+    score += 2.0 if (has_date and has_time) else 0.0
+
+    return score
+
+
+def detect_header_row_from_preview(df_preview: pd.DataFrame, alias_table: Dict[str, set]) -> int:
+    """
+    Given a preview df read with header=None, return best header row index.
+    Defaults to 0 if nothing clearly wins.
+    """
+    best_row = 0
+    best_score = -1.0
+
+    # Only scan first N rows of preview
+    for r in range(len(df_preview)):
+        row_vals = df_preview.iloc[r].tolist()
+        s = _score_header_candidate(row_vals, alias_table)
+        if s > best_score:
+            best_score = s
+            best_row = r
+
+    # Require at least a modest score to override row 0
+    # (prevents false positives on weird files)
+    if best_score < 6.0:
+        return 0
+
+    return int(best_row)
+
+
+def combine_date_time(date_s: pd.Series, time_s: pd.Series) -> pd.Series:
+    """
+    Combine separate Date and Time-of-day columns into a single datetime series.
+    Handles:
+      - time as strings ("13:05:00")
+      - time as Excel fractions of day (numeric)
+      - time as datetime64 (we extract time delta)
+    """
+    d = pd.to_datetime(date_s, errors="coerce")
+
+    # numeric time often means Excel day-fraction
+    if pd.api.types.is_numeric_dtype(time_s):
+        tnum = pd.to_numeric(time_s, errors="coerce")
+        return d.dt.normalize() + pd.to_timedelta(tnum, unit="D")
+
+    t = pd.to_datetime(time_s, errors="coerce")
+
+    # if t is datetime-like, extract time delta within day
+    td = t - t.dt.normalize()
+    return d.dt.normalize() + td
+
+def detect_delimiter_from_lines(lines: list[str]) -> str:
+    """
+    Pick a delimiter by counting occurrences across the first few non-empty lines.
+    Works well for comma, tab, semicolon, pipe.
+    """
+    candidates = [",", "\t", ";", "|"]
+    best = ","
+    best_score = -1
+    for d in candidates:
+        score = sum(line.count(d) for line in lines if line.strip())
+        if score > best_score:
+            best_score = score
+            best = d
+    return best
+
+
+def preview_csv_to_dataframe(file_bytes: bytes, encoding: str, n_lines: int = 25) -> tuple[pd.DataFrame, str]:
+    """
+    Read first n_lines using csv.reader (tolerant of ragged rows), return a DataFrame + detected delimiter.
+    """
+    text = file_bytes.decode(encoding, errors="replace")
+    lines = text.splitlines()[:n_lines]
+
+    # If file is mostly empty, return empty df
+    if not any(l.strip() for l in lines):
+        return pd.DataFrame(), ","
+
+    delim = detect_delimiter_from_lines(lines)
+
+    reader = csv.reader(StringIO("\n".join(lines)), delimiter=delim)
+    rows = [r for r in reader]
+
+    # Normalize to rectangular table (pad shorter rows)
+    max_cols = max((len(r) for r in rows), default=0)
+    rows = [r + [None] * (max_cols - len(r)) for r in rows]
+
+    df_preview = pd.DataFrame(rows)
+    return df_preview, delim
+
+def load_table_from_bytes(file_bytes: bytes, ext: str) -> Tuple[pd.DataFrame, str, Optional[str], int]:
     ext = ext.lower()
+    alias_table = build_alias_table()
 
     if ext in [".xlsx", ".xls", ".xlsm"]:
-        df = pd.read_excel(io.BytesIO(file_bytes))
-        return df, "excel", None
+        bio = io.BytesIO(file_bytes)
+
+        # preview with no header to detect where headers actually are
+        preview = pd.read_excel(bio, header=None, nrows=12)
+        header_row = detect_header_row_from_preview(preview, alias_table)
+
+        # re-read full with detected header row
+        bio2 = io.BytesIO(file_bytes)
+        df = pd.read_excel(bio2, skiprows=header_row, header=0)
+        return df, "excel", None, header_row
 
     encodings = ["utf-8", "utf-8-sig", "cp1252", "latin1"]
     last_err = None
+
     for enc in encodings:
         try:
-            df = pd.read_csv(io.BytesIO(file_bytes), encoding=enc)
-            return df, "csv", enc
+            # Preview using tolerant CSV reader (handles ragged "metadata" rows)
+            preview, delim = preview_csv_to_dataframe(file_bytes, enc, n_lines=10)
+            header_row = detect_header_row_from_preview(preview, alias_table)
+
+            # Now read the full file, skipping metadata rows above header
+            bio2 = io.BytesIO(file_bytes)
+            df = pd.read_csv(
+                bio2,
+                encoding=enc,
+                sep=delim,
+                skiprows=header_row,
+                header=0,
+            )
+            return df, "csv", enc, header_row
+
         except Exception as e:
             last_err = e
+
 
     raise last_err if last_err is not None else ValueError("Could not read file.")
 
@@ -120,25 +275,43 @@ def build_clean_dataframe(df_raw: pd.DataFrame, raw_to_canon: Dict[str, str]) ->
     for raw, canon in raw_to_canon.items():
         canon_to_raw.setdefault(canon, raw)
 
-    #only export irrigaiton canons that are actually mapped
-    canon_order = CANON_BASE + [
-        f"irrigation{i}"
-        for i in range(1, MAX_IRRIGATION_ZONES + 1)
-        if f"Irrigation{i}" in canon_to_raw
-    ]
-
     data = {}
-    for canon in CANON_ORDER:
+
+    # -----------------------
+    # 1) Build canonical Time
+    # -----------------------
+    raw_time = canon_to_raw.get("Time")
+    raw_date = canon_to_raw.get("Date")
+    raw_timeofday = canon_to_raw.get("TimeOfDay")
+
+    time_series = None
+
+    # Prefer combining if Date exists and (TimeOfDay exists OR Time exists)
+    if raw_date and raw_date in df_raw.columns and (
+        (raw_timeofday and raw_timeofday in df_raw.columns) or (raw_time and raw_time in df_raw.columns)
+    ):
+        tcol = raw_timeofday if (raw_timeofday and raw_timeofday in df_raw.columns) else raw_time
+        time_series = combine_date_time(df_raw[raw_date], df_raw[tcol])
+
+    elif raw_time and raw_time in df_raw.columns:
+        time_series = pd.to_datetime(df_raw[raw_time], errors="coerce")
+
+    if time_series is not None:
+        data["Time"] = time_series
+
+    # -----------------------
+    # 2) Other numeric columns
+    # -----------------------
+    for canon in CANON_OUTPUT_ORDER:
+        if canon == "Time":
+            continue
+
         raw = canon_to_raw.get(canon)
         if raw is None or raw not in df_raw.columns:
             continue
 
         s = df_raw[raw]
-        if canon == "Time":
-            s = pd.to_datetime(s, errors="coerce")
-        else:
-            s = pd.to_numeric(s, errors="coerce")
-
+        s = pd.to_numeric(s, errors="coerce")
         data[canon] = s
 
     if not data:
@@ -316,7 +489,7 @@ if (not new_upload_active) and (selected_file_id is not None):
                     if st.button("Remove irrigation zone", key="savedmap_rm_irrig"):
                         st.session_state.savedmap_irrig_count = max(1, st.session_state.savedmap_irrig_count - 1)
 
-                canon_list_saved = CANON_BASE + [f"Irrigation{i}" for i in range(1, st.session_state.savedmap_irrig_count + 1)]
+                canon_list_saved = CANON_OUTPUT_BASE + [f"Irrigation{i}" for i in range(1, st.session_state.savedmap_irrig_count + 1)]
 
                 with st.form("edit_saved_mapping_form"):
                     st.caption(
@@ -364,7 +537,10 @@ if uploaded is not None:
     ext = Path(original_name).suffix or ".csv"
     file_bytes_raw = uploaded.getvalue()
 
-    df_raw, file_type, encoding_used = load_table_from_bytes(file_bytes_raw, ext)
+    df_raw, file_type, encoding_used, header_row = load_table_from_bytes(file_bytes_raw, ext)
+    if header_row > 0:
+        st.info(f"Detected headers on row {header_row+1} (skipped {header_row} row(s) above).")
+    
     raw_cols = [str(c) for c in df_raw.columns]
 
     if file_type == "excel":
@@ -413,7 +589,7 @@ if uploaded is not None:
         if st.button("Remove irrigation zone", key="newupload_rm_irrig"):
             st.session_state.newupload_irrig_count = max(1, st.session_state.newupload_irrig_count - 1)
 
-    canon_list_new = CANON_BASE + [f"Irrigation{i}" for i in range(1, st.session_state.newupload_irrig_count + 1)]
+    canon_list_new = CANON_UI_BASE + [f"Irrigation{i}" for i in range(1, st.session_state.newupload_irrig_count + 1)]
 
     with st.form("new_upload_mapping_form"):
         raw_to_canon, canon_to_raw, duplicates = canon_select_ui(
