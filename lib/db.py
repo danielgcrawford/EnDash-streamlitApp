@@ -129,6 +129,9 @@ def init_db() -> None:
         cur.execute("ALTER TABLE settings ADD COLUMN last_raw_columns JSONB;")
     if "last_canon_to_raw" not in existing_cols:
         cur.execute("ALTER TABLE settings ADD COLUMN last_canon_to_raw JSONB;")
+    # Persist Home page state across sessions (last viewed file on Home)
+    if "last_home_file_id" not in existing_cols:
+        cur.execute("ALTER TABLE settings ADD COLUMN last_home_file_id INTEGER;")
 
     # App meta key/value store
     cur.execute(
@@ -616,6 +619,25 @@ def get_last_upload_context(user_id: int) -> Dict[str, Any]:
         "raw_columns": row.get("last_raw_columns") or [],
         "canon_to_raw": row.get("last_canon_to_raw") or {},
     }
+
+def set_last_home_file_id(user_id: int, file_id: Optional[int]) -> None:
+    conn = get_conn()
+    cur = conn.cursor()
+    cur.execute(
+        "UPDATE settings SET last_home_file_id = %s WHERE user_id = %s;",
+        (file_id, user_id),
+    )
+    conn.commit()
+    cur.close()
+    conn.close()
+
+
+def get_last_home_file_id(user_id: int) -> Optional[int]:
+    row = get_or_create_settings(user_id)
+    if not row:
+        return None
+    val = row.get("last_home_file_id")
+    return int(val) if val is not None else None
 
 
 # -------- Meta & admin helpers --------

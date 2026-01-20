@@ -920,24 +920,40 @@ if not files:
     st.info("No cleaned files found yet. Upload a file above to get started.")
     st.stop()
 
-options = {f"{rec['filename']} ({rec['uploaded_at']})": rec for rec in files}
+# Build stable option list using file IDs (NOT label strings)
+id_to_rec = {int(rec["id"]): rec for rec in files}
+file_ids = list(id_to_rec.keys())  # list is already most-recent first from DB
 
-# Persist selection across reruns; default to most recent
-default_label = list(options.keys())[0]
-if "selected_file_label" not in st.session_state:
-    st.session_state.selected_file_label = default_label
+def _home_file_label(fid: int) -> str:
+    r = id_to_rec[int(fid)]
+    return f"{r['filename']} ({r['uploaded_at']})"
 
-selected_label = st.selectbox(
+# DB-backed default (same pattern as Upload page)
+last_home_id = db.get_last_home_file_id(user["id"])
+default_id = last_home_id if (last_home_id in id_to_rec) else file_ids[0]
+
+# Initialize session state ONCE (do not overwrite on every rerun)
+if "home_selected_file_id" not in st.session_state:
+    st.session_state.home_selected_file_id = default_id
+
+# If the selected ID no longer exists (deleted), fall back safely
+if int(st.session_state.home_selected_file_id) not in id_to_rec:
+    st.session_state.home_selected_file_id = default_id
+
+selected_file_id = st.selectbox(
     "Select a cleaned data file",
-    list(options.keys()),
-    index=list(options.keys()).index(st.session_state.selected_file_label)
-    if st.session_state.selected_file_label in options
-    else 0,
-    key="selected_file_label",
+    file_ids,
+    format_func=_home_file_label,
+    key="home_selected_file_id",
 )
 
-rec = options[selected_label]
-st.session_state["selected_file_id"] = rec["id"]  # useful later for Chatbot, etc.
+# Persist selection like Upload page does (DB + session)
+if st.session_state.get("home_selected_file_id_last_saved") != int(selected_file_id):
+    db.set_last_home_file_id(user["id"], int(selected_file_id))
+    st.session_state.home_selected_file_id_last_saved = int(selected_file_id)
+
+rec = id_to_rec[int(selected_file_id)]
+st.session_state["selected_file_id"] = int(selected_file_id)  # used elsewhere in Home
 
 st.markdown("---")
 
