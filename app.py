@@ -735,11 +735,11 @@ with col3:
     download_slot = st.empty()
 
 # ----- Quick Upload panel (always visible) -----
-st.markdown("### Quick Upload")
+st.markdown("### New File Upload")
 st.caption(
-    "Drop a data file here to add it to your saved cleaned datasets. "
-    "To edit column selections and preview data, use the Upload page. "
-    "Edit units and desired conditions in Settings."
+    "Drop a data file here to add it to your dashboard. "
+    "To edit column selections and preview data, use the Data File Settings page. "
+    "To edit units and target setpoints, use the Climate Units and Setpoints page."
 )
 
 #Functions added to accept variable row of column headings and separate Date/Time
@@ -783,7 +783,7 @@ def preview_csv_to_dataframe(file_bytes: bytes, encoding: str, n_lines: int = 25
     return df_preview, delim
 
 quick_file = st.file_uploader(
-    "Quick upload (.csv, .xlsx, .xls, .xlsm)",
+    "File upload (.csv, .xlsx, .xls, .xlsm)",
     type=["csv", "xlsx", "xls", "xlsm"],
     key="quick_upload_file",
 )
@@ -913,7 +913,7 @@ if upload_succeeded:
     st.rerun()
 
 # ----- File selection (DIRECTLY BELOW Quick Upload) -----
-st.markdown("### File Selection")
+st.markdown("### Current File Selection")
 
 files = db.list_user_files(user["id"])
 if not files:
@@ -941,7 +941,7 @@ if int(st.session_state.home_selected_file_id) not in id_to_rec:
     st.session_state.home_selected_file_id = default_id
 
 selected_file_id = st.selectbox(
-    "Select a cleaned data file",
+    "Select a data file to view",
     file_ids,
     format_func=_home_file_label,
     key="home_selected_file_id",

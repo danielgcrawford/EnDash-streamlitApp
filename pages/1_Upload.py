@@ -388,11 +388,11 @@ db.init_db()
 
 st.title("📂 Upload data file")
 
-uploaded = st.file_uploader("Choose a data file", type=["csv", "xlsx", "xls", "xlsm"])
+uploaded = st.file_uploader("Upload a new data file", type=["csv", "xlsx", "xls", "xlsm"])
 new_upload_active = uploaded is not None
 
 # ---- Previously uploaded file selector (persistent) ----
-st.caption("Select a previously uploaded cleaned file to review/download it and manage its saved column mapping.")
+#st.caption("Select a previously uploaded cleaned file to review/download it and manage its saved column mapping.")
 files = db.list_user_files(user["id"])
 
 last_ctx = db.get_last_upload_context(user["id"])
@@ -414,7 +414,7 @@ if options:
                 break
 
     selected_label = st.selectbox(
-        "Previously uploaded files",
+        "Current File Selection",
         labels,
         index=default_index,
         key="uploaded_file_select",
