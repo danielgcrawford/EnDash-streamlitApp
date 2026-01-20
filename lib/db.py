@@ -621,8 +621,13 @@ def get_last_upload_context(user_id: int) -> Dict[str, Any]:
     }
 
 def set_last_home_file_id(user_id: int, file_id: Optional[int]) -> None:
+    """Persist the user's last-selected file on the Home page."""
     conn = get_conn()
     cur = conn.cursor()
+    cur.execute(
+        "INSERT INTO settings (user_id) VALUES (%s) ON CONFLICT (user_id) DO NOTHING;",
+        (user_id,),
+    )
     cur.execute(
         "UPDATE settings SET last_home_file_id = %s WHERE user_id = %s;",
         (file_id, user_id),
