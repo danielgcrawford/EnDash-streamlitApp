@@ -507,20 +507,70 @@ if (not new_upload_active) and (selected_file_id is not None):
                     if duplicates:
                         st.error(f"Duplicate selections: {', '.join(duplicates)}")
                     else:
-                        db.upsert_file_column_map(
-                            user["id"],
-                            selected_file_id,
-                            raw_columns=raw_cols,
-                            canon_to_raw=canon_to_raw,
-                            raw_preview_rows=map_rec.get("raw_preview"),
-                        )
-                        db.set_last_upload_context(
-                            user["id"],
-                            file_id=selected_file_id,
-                            raw_columns=raw_cols,
-                            canon_to_raw=canon_to_raw,
-                        )
-                        st.success("Saved. These selections will be used as defaults for Quick Upload.")
+                        # 1) Try to regenerate cleaned file from stored RAW bytes
+                        raw_obj = db.get_raw_file_bytes(selected_file_id)
+                        if not raw_obj:
+                            # Older files may not have raw bytes stored yet
+                            db.upsert_file_column_map(
+                                user["id"],
+                                selected_file_id,
+                                raw_columns=raw_cols,
+                                canon_to_raw=canon_to_raw,
+                                raw_preview_rows=map_rec.get("raw_preview"),
+                            )
+                            db.set_last_upload_context(
+                                user["id"],
+                                file_id=selected_file_id,
+                                raw_columns=raw_cols,
+                                canon_to_raw=canon_to_raw,
+                            )
+                            st.warning(
+                                "Saved mapping selections, but this file was uploaded before raw-file storage was enabled, "
+                                "so the cleaned file cannot be regenerated automatically. Re-upload the original file once "
+                                "to enable live regeneration on future edits."
+                            )
+                        else:
+                            # Convert canon_to_raw -> raw_to_canon for cleaning
+                            raw_to_canon_new = {raw: canon for canon, raw in canon_to_raw.items() if raw}
+
+                            # Re-read raw file exactly like the original upload flow
+                            raw_filename = raw_obj["raw_filename"]
+                            ext = Path(raw_filename).suffix or ".csv"
+                            df_raw2, _, _, _ = load_table_from_bytes(raw_obj["bytes"], ext)
+
+                            df_clean2 = build_clean_dataframe(df_raw2, raw_to_canon_new)
+
+                            required_for_dashboard = ["Time", "AirTemp", "RH"]
+                            missing = [c for c in required_for_dashboard if c not in df_clean2.columns]
+                            if missing:
+                                st.error(
+                                    "Cannot save mapping because the regenerated cleaned file would be missing "
+                                    "required dashboard columns: " + ", ".join(missing)
+                                )
+                            else:
+                                # 2) Save mapping metadata
+                                db.upsert_file_column_map(
+                                    user["id"],
+                                    selected_file_id,
+                                    raw_columns=raw_cols,
+                                    canon_to_raw=canon_to_raw,
+                                    raw_preview_rows=map_rec.get("raw_preview"),
+                                )
+
+                                # 3) Overwrite cleaned file bytes in Neon
+                                cleaned_bytes2 = df_clean2.to_csv(index=False).encode("utf-8")
+                                db.update_file_content(selected_file_id, cleaned_bytes2)
+
+                                # 4) Persist as template for quick upload
+                                db.set_last_upload_context(
+                                    user["id"],
+                                    file_id=selected_file_id,
+                                    raw_columns=raw_cols,
+                                    canon_to_raw=canon_to_raw,
+                                )
+
+                                st.success("Saved mapping selections and regenerated the cleaned file.")
+                                st.rerun()
 
                 if map_rec.get("raw_preview"):
                     with st.expander("Raw preview (first 10 rows from the original upload)", expanded=False):
@@ -633,7 +683,13 @@ if uploaded is not None:
         stored_filename = f"{orig_stem}_{uname}.csv"
 
         cleaned_bytes = df_clean.to_csv(index=False).encode("utf-8")
-        file_id = db.add_file_record(user["id"], stored_filename, cleaned_bytes)
+        file_id = db.add_file_record(
+            user["id"],
+            stored_filename,
+            cleaned_bytes,
+            raw_filename=original_name,
+            raw_bytes=file_bytes_raw,
+        )
 
         db.upsert_file_column_map(
             user["id"],

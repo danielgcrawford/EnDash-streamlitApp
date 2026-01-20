@@ -148,10 +148,27 @@ def init_db() -> None:
             user_id     INTEGER NOT NULL REFERENCES users(id),
             filename    TEXT NOT NULL,
             content     BYTEA NOT NULL,
+            raw_filename    TEXT,
+            raw_content BYTEA,
             uploaded_at TIMESTAMPTZ DEFAULT NOW()
         );
         """
     )
+
+    # --- Lightweight migration for older databases (files table) ---
+    cur.execute(
+        """
+        SELECT column_name
+        FROM information_schema.columns
+        WHERE table_name = 'files';
+        """
+    )
+    files_cols = {row["column_name"] for row in cur.fetchall()}
+
+    if "raw_filename" not in files_cols:
+        cur.execute("ALTER TABLE files ADD COLUMN raw_filename TEXT;")
+    if "raw_content" not in files_cols:
+        cur.execute("ALTER TABLE files ADD COLUMN raw_content BYTEA;")
 
     # File column mapping + preview metadata (so mapping UI persists across sessions)
     cur.execute(
@@ -185,11 +202,10 @@ def init_db() -> None:
         cur.execute("ALTER TABLE file_column_maps ADD COLUMN raw_preview JSONB;")
     if "updated_at" not in fcm_cols:
         cur.execute("ALTER TABLE file_column_maps ADD COLUMN updated_at TIMESTAMPTZ DEFAULT NOW();")
-
+    
     conn.commit()
     cur.close()
     conn.close()
-
 
 # -------- Users & settings --------
 
@@ -311,6 +327,7 @@ def update_settings(
     cur.close()
     conn.close()
 
+
 def update_leaf_wetness_event_settings(
     user_id: int,
     *,
@@ -360,19 +377,34 @@ def list_user_files(user_id: int) -> List[Dict[str, Any]]:
     return rows
 
 
-def add_file_record(user_id: int, filename: str, file_bytes: bytes) -> int:
+def add_file_record(
+    user_id: int,
+    filename: str,
+    file_bytes: bytes,
+    *,
+    raw_filename: Optional[str] = None,
+    raw_bytes: Optional[bytes] = None,
+) -> int:
     """
     Store the CLEANED CSV bytes in Neon and return the created file_id.
+    Also stores the original RAW upload bytes so the cleaned file can be regenerated
+    later if the user edits the column mapping.
     """
     conn = get_conn()
     cur = conn.cursor()
     cur.execute(
         """
-        INSERT INTO files (user_id, filename, content)
-        VALUES (%s, %s, %s)
+        INSERT INTO files (user_id, filename, content, raw_filename, raw_content)
+        VALUES (%s, %s, %s, %s, %s)
         RETURNING id;
         """,
-        (user_id, filename, psycopg2.Binary(file_bytes)),
+        (
+            user_id,
+            filename,
+            psycopg2.Binary(file_bytes),
+            raw_filename,
+            psycopg2.Binary(raw_bytes) if raw_bytes is not None else None,
+        ),
     )
     file_id = cur.fetchone()["id"]
     conn.commit()
@@ -412,6 +444,47 @@ def get_file_bytes(file_id: int) -> Optional[Dict[str, Any]]:
         raise TypeError(f"Unexpected type for files.content: {type(content)}")
 
     return {"filename": row["filename"], "bytes": content_bytes}
+
+def get_raw_file_bytes(file_id: int) -> Optional[Dict[str, Any]]:
+    """
+    Fetch the ORIGINAL RAW upload bytes stored for a file.
+    Returns {"raw_filename": str, "bytes": bytes} or None if not present.
+    """
+    conn = get_conn()
+    cur = conn.cursor()
+    cur.execute(
+        "SELECT raw_filename, raw_content FROM files WHERE id = %s;",
+        (file_id,),
+    )
+    row = cur.fetchone()
+    cur.close()
+    conn.close()
+
+    if not row or row.get("raw_content") is None:
+        return None
+
+    content = row["raw_content"]
+    if isinstance(content, memoryview):
+        content_bytes = content.tobytes()
+    elif isinstance(content, bytes):
+        content_bytes = content
+    else:
+        raise TypeError(f"Unexpected type for files.raw_content: {type(content)}")
+
+    return {"raw_filename": row.get("raw_filename") or "raw_upload", "bytes": content_bytes}
+
+
+def update_file_content(file_id: int, file_bytes: bytes) -> None:
+    """Overwrite the cleaned CSV bytes stored in Neon for an existing file."""
+    conn = get_conn()
+    cur = conn.cursor()
+    cur.execute(
+        "UPDATE files SET content = %s WHERE id = %s;",
+        (psycopg2.Binary(file_bytes), file_id),
+    )
+    conn.commit()
+    cur.close()
+    conn.close()
 
 
 # -------- Upload mapping persistence --------
