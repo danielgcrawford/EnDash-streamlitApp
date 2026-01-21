@@ -155,7 +155,7 @@ def _score_header_candidate(values: list[object], alias_table: dict[str, set]) -
     alias_norms = set().union(*alias_table.values())
     hits = sum(1 for s in cleaned if normalize(s) in alias_norms)
 
-    # small boost if row contains at least one "date" and one "time"-ish token
+    # small boost if row contains at least one "date" and one "time" token
     norms = [normalize(s) for s in cleaned]
     has_date = any(n in ("date", "day") or "date" in n for n in norms)
     has_time = any(n == "time" or "time" in n for n in norms)
@@ -177,7 +177,7 @@ def detect_header_row_from_preview(df_preview: pd.DataFrame, alias_table: dict[s
     best_row = 0
     best_score = -1.0
 
-    # Only scan first N rows of preview (nrows=12)
+    # Only scan first N rows of preview (n_lines=25)
     for r in range(len(df_preview)):
         row_vals = df_preview.iloc[r].tolist()
         s = _score_header_candidate(row_vals, alias_table)
@@ -419,7 +419,7 @@ def plot_separator():
 
 #Naming
 def pretty_label(col: str, temp_unit: str) -> str:
-    """Human-readable labels with units (write out words instead of abbreviations)."""
+    """Readable labels with units (write out words instead of abbreviations)."""
     temp_symbol = "°F" if temp_unit == "F" else "°C"
     if col == "AirTemp":
         return f"Air Temperature ({temp_symbol})"
@@ -731,7 +731,6 @@ with col2:
         st.switch_page("pages/2_Settings.py")
 
 with col3:
-    # We fill this later once we’ve built the PDF.
     download_slot = st.empty()
 
 # ----- Quick Upload panel (always visible) -----
@@ -953,7 +952,7 @@ if st.session_state.get("home_selected_file_id_last_saved") != int(selected_file
     st.session_state.home_selected_file_id_last_saved = int(selected_file_id)
 
 rec = id_to_rec[int(selected_file_id)]
-st.session_state["selected_file_id"] = int(selected_file_id)  # used elsewhere in Home
+st.session_state["selected_file_id"] = int(selected_file_id) 
 
 st.markdown("---")
 
@@ -1055,7 +1054,7 @@ if vpd_leaf is not None:
 elif vpd_air is not None:
     df_display["VPDair"] = vpd_air
 
-# Compute DLI only when PAR is truly PPFD
+# Compute DLI only when PAR is PPFD
 daily_dli_series = None
 if orig_light_unit == "PPFD" and "Time" in df_display.columns and "PAR" in df_display.columns:
     daily_dli_series = compute_daily_dli(df_display[["Time", "PAR"]])

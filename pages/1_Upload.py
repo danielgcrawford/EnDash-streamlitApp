@@ -14,6 +14,8 @@ from lib import auth, db
 import csv
 from io import StringIO
 
+import hashlib
+
 # Adding numbers to column names
 def make_indexed_labels(raw_cols: List[str]) -> Tuple[List[str], Dict[str, str], Dict[str, str]]:
     """
@@ -34,6 +36,95 @@ def with_indexed_headers(df: pd.DataFrame) -> pd.DataFrame:
     cols = [str(c) for c in df.columns]
     new_cols = {c: f"[{i:02d}] {c}" for i, c in enumerate(cols)}
     return df.rename(columns=new_cols)
+
+def missing_required_cols(df_clean: pd.DataFrame) -> List[str]:
+    """
+    Require:
+      1) A Time column
+      2) At least one additional (non-Time) data column
+    Return a list of "missing requirements" for display.
+    """
+    missing = []
+
+    has_time = "Time" in df_clean.columns
+    if not has_time:
+        missing.append("Time")
+
+    # Count non-Time columns with at least one non-null value
+    data_cols = [c for c in df_clean.columns if c != "Time"]
+    has_any_data_col = any(df_clean[c].notna().any() for c in data_cols)
+
+    if not has_any_data_col:
+        missing.append("At least one data column")
+
+    return missing
+
+def show_incomplete_mapping_warning(missing: List[str]) -> None:
+    st.warning(
+        "Mapping updates the preview immediately, but the dashboard file is **not updated yet**.\n\n"
+        f"Missing requirement(s): **{', '.join(missing)}**\n\n"
+        "Map a Time column and at least one data column to enable dashboard updates.",
+        icon="⚠️",
+    )
+
+def mapping_signature(canon_list: List[str], canon_to_raw: Dict[str, Optional[str]]) -> str:
+    parts = [f"{c}={canon_to_raw.get(c) or ''}" for c in canon_list]
+    return "|".join(parts)
+
+def preview_table_with_mapping_row(
+    df_raw_preview: pd.DataFrame,
+    raw_cols: List[str],
+    canon_to_raw: Dict[str, Optional[str]],
+    none_label: str = "(None)",
+) -> pd.DataFrame:
+    """
+    Build a single preview table (like raw preview) but with a top row showing mapped canonical names.
+    The row values are the canonical label for each raw column, or '(None)' if unmapped.
+    """
+    # Invert canon_to_raw -> raw_to_canon (one-to-one is expected)
+    raw_to_canon = {str(raw): str(canon) for canon, raw in (canon_to_raw or {}).items() if raw}
+
+    # Mapping row aligned to raw_cols
+    mapping_row = {c: raw_to_canon.get(str(c), none_label) for c in raw_cols}
+
+    df_head = df_raw_preview.head(10).copy()
+
+    # Prepend mapping row
+    df_show = pd.concat([pd.DataFrame([mapping_row]), df_head], ignore_index=True)
+
+    # Make index label nicer (Mapped row + data rows)
+    df_show.index = ["Mapped as"] + [str(i) for i in range(len(df_head))]
+
+
+    df_show = make_arrow_safe_for_preview(df_show)
+
+    # Add indexed headers for readability
+    return with_indexed_headers(df_show)
+
+def make_arrow_safe_for_preview(df: pd.DataFrame) -> pd.DataFrame:
+    """
+    Streamlit/Arrow-safe dataframe for display:
+    - Decodes bytes -> strings
+    - Converts all cells -> strings ('' for NA)
+    Uses DataFrame.map (pandas >=2.1/2.2) with a safe fallback.
+    """
+    def _cell(x):
+        if x is None or (isinstance(x, float) and pd.isna(x)) or pd.isna(x):
+            return ""
+        if isinstance(x, (bytes, bytearray, memoryview)):
+            try:
+                return bytes(x).decode("utf-8", errors="replace")
+            except Exception:
+                return str(x)
+        return str(x)
+
+    # pandas new API: DataFrame.map
+    if hasattr(df, "map"):
+        return df.map(_cell)
+
+    # fallback for older pandas: apply column-wise map
+    return df.apply(lambda s: s.map(_cell))
+
 
 # ------------- Canonical mapping helpers -------------
 
@@ -377,6 +468,141 @@ def canon_select_ui(
 
     return raw_to_canon, canon_to_raw, sorted(set(duplicates))
 
+# ---- New UI: "mapping header row" editor (one-row data_editor) ----
+
+IGNORE_CANON = "(Ignore)"
+
+def _invert_canon_to_raw_to_raw_to_canon(canon_to_raw: Dict[str, Optional[str]]) -> Dict[str, str]:
+    """Convert {canon: raw} -> {raw: canon} (dropping Nones)."""
+    out = {}
+    for canon, raw in (canon_to_raw or {}).items():
+        if raw:
+            out[str(raw)] = str(canon)
+    return out
+
+
+def mapping_header_editor(
+    *,
+    raw_cols: List[str],
+    default_raw_to_canon: Dict[str, str],
+    canon_options: List[str],
+    editor_key: str,
+) -> Tuple[Dict[str, str], List[str]]:
+    """
+    Shows a 1-row grid where each RAW column is a cell, and the cell value is the selected CANON name.
+    Returns:
+      raw_to_canon: {raw_col: canon} for non-ignored selections
+      dup_canons: list of canonical names that were selected more than once
+    """
+    # Use indexed labels so columns are visually distinct and stable
+    labels, raw_to_label, label_to_raw = make_indexed_labels(raw_cols)
+
+    row_dict = {}
+    for raw in raw_cols:
+        lab = raw_to_label[raw]
+        row_dict[lab] = default_raw_to_canon.get(raw, IGNORE_CANON)
+
+    df_row = pd.DataFrame([row_dict], index=["Mapped as"])
+
+    col_cfg = {
+        lab: st.column_config.SelectboxColumn(
+            options=canon_options,
+            required=False,
+            help="Select the canonical meaning for this raw column."
+        )
+        for lab in labels
+    }
+
+    edited = st.data_editor(
+        df_row,
+        column_config=col_cfg,
+        hide_index=False,
+        width='stretch',
+        key=editor_key,
+    )
+
+    # Build raw_to_canon from edited row
+    raw_to_canon: Dict[str, str] = {}
+    selected_canons = []
+    for lab in labels:
+        raw = label_to_raw[lab]
+        val = str(edited.iloc[0][lab]) if edited.iloc[0][lab] is not None else IGNORE_CANON
+        if val and val != IGNORE_CANON:
+            raw_to_canon[raw] = val
+            selected_canons.append(val)
+
+    # Detect duplicate canon selections (not allowed)
+    dup_canons = sorted({c for c in selected_canons if selected_canons.count(c) > 1})
+    return raw_to_canon, dup_canons
+
+
+def save_mapping_and_regenerate_cleaned_file(
+    *,
+    user_id: int,
+    file_id: int,
+    raw_cols: List[str],
+    raw_to_canon: Dict[str, str],
+    raw_preview_rows: Optional[List[Dict[str, object]]] = None,
+) -> Tuple[bool, str]:
+    """
+    Persists mapping + regenerates cleaned bytes in Neon (if raw bytes exist).
+    Returns (ok, message).
+    """
+    # Convert raw_to_canon -> canon_to_raw for persistence
+    canon_to_raw = {canon: raw for raw, canon in raw_to_canon.items()}
+
+    raw_obj = db.get_raw_file_bytes(file_id)
+    if not raw_obj:
+        # Still save mapping metadata + template, but can't regenerate cleaned file
+        db.upsert_file_column_map(
+            user_id,
+            file_id,
+            raw_columns=raw_cols,
+            canon_to_raw=canon_to_raw,
+            raw_preview_rows=raw_preview_rows,
+        )
+        db.set_last_upload_context(user_id, file_id=file_id, raw_columns=raw_cols, canon_to_raw=canon_to_raw)
+        return False, (
+            "Mapping saved, but this file was uploaded before raw-file storage was enabled, "
+            "so the cleaned file cannot be regenerated automatically. Re-upload the original file once "
+            "to enable live regeneration on future edits."
+        )
+
+    raw_filename = raw_obj["raw_filename"]
+    ext = Path(raw_filename).suffix or ".csv"
+    df_raw2, _, _, _ = load_table_from_bytes(raw_obj["bytes"], ext)
+
+    df_clean2 = build_clean_dataframe(df_raw2, raw_to_canon)
+
+    required_for_dashboard = ["Time", "AirTemp", "RH"]
+    missing = [c for c in required_for_dashboard if c not in df_clean2.columns]
+    if missing:
+        return False, (
+            "Cannot apply mapping because the regenerated cleaned file would be missing "
+            "required dashboard columns: " + ", ".join(missing)
+        )
+
+    # Save mapping metadata (+ refreshed preview), overwrite cleaned bytes, persist template
+    preview_rows = (
+        df_raw2.head(10)
+        .where(pd.notnull(df_raw2.head(10)), None)
+        .to_dict(orient="records")
+    )
+
+    db.upsert_file_column_map(
+        user_id,
+        file_id,
+        raw_columns=[str(c) for c in df_raw2.columns],
+        canon_to_raw=canon_to_raw,
+        raw_preview_rows=preview_rows,
+    )
+
+    cleaned_bytes2 = df_clean2.to_csv(index=False).encode("utf-8")
+    db.update_file_content(file_id, cleaned_bytes2)
+
+    db.set_last_upload_context(user_id, file_id=file_id, raw_columns=[str(c) for c in df_raw2.columns], canon_to_raw=canon_to_raw)
+    return True, "Mapping saved and cleaned file regenerated."
+
 # ------------- Streamlit page -------------
 
 st.set_page_config(page_title="Upload", page_icon="📂", layout="wide")
@@ -426,295 +652,235 @@ else:
 
 st.divider()
 
-# ---- Section A: existing file review/edit ----
-if (not new_upload_active) and (selected_file_id is not None):
-    st.subheader("Saved mapping + file preview")
+# ---- Unified: Active dataset (uploaded OR selected existing) ----
 
-    map_rec = db.get_file_column_map(selected_file_id)
+active_mode = None          # "upload" or "existing"
+active_key = None           # used for session keys
+active_file_id = None       # Neon file_id if exists
+df_raw_full = None          # full raw df for cleaning
+df_raw_preview = None       # raw df for preview
+raw_cols = None
+saved_canon_to_raw = {}
+raw_bytes_available = False
+raw_bytes = None
+raw_filename = None
 
-    if map_rec and map_rec.get("canon_to_raw") is not None:
-        db.set_last_upload_context(
-            user["id"],
-            file_id=selected_file_id,
-            raw_columns=map_rec.get("raw_columns") or [],
-            canon_to_raw=map_rec.get("canon_to_raw") or {},
-        )
-
-    col1, col2 = st.columns([1, 1], gap="large")
-
-    with col1:
-        st.markdown("#### Cleaned file preview (stored in Neon)")
-        file_obj = db.get_file_bytes(selected_file_id)
-        if not file_obj:
-            st.error("Could not load file bytes from Neon.")
-        else:
-            df_clean = pd.read_csv(io.BytesIO(file_obj["bytes"]))
-            st.dataframe(df_clean.head(10), use_container_width=True)
-            st.caption(f"Detected columns: {', '.join(df_clean.columns)}")
-
-            st.download_button(
-                "⬇️ Download cleaned CSV",
-                data=file_obj["bytes"],
-                file_name=file_obj["filename"],
-                mime="text/csv",
-            )
-
-    with col2:
-        st.markdown("#### Saved column mapping (editable)")
-        if not map_rec:
-            st.info("No mapping metadata found for this file (older upload).")
-        else:
-            raw_cols = [str(c) for c in (map_rec.get("raw_columns") or [])]
-            saved_canon_to_raw = map_rec.get("canon_to_raw") or {}
-
-            if not raw_cols:
-                st.warning("No raw column list was saved for this file; selections cannot be edited.")
-            else:
-                # ---------- Irrigation UI state (Saved mapping editor) ----------
-                if "savedmap_irrig_count" not in st.session_state:
-                    # infer from saved mapping keys, default to 1
-                    inferred = 1
-                    for i in range(1, MAX_IRRIGATION_ZONES + 1):
-                        if (saved_canon_to_raw or {}).get(f"Irrigation{i}"):
-                            inferred = i
-                    st.session_state.savedmap_irrig_count = inferred
-
-                b1, b2 = st.columns([1, 1])
-                with b1:
-                    if st.button("Add irrigation zone", key="savedmap_add_irrig"):
-                        st.session_state.savedmap_irrig_count = min(
-                            MAX_IRRIGATION_ZONES, st.session_state.savedmap_irrig_count + 1
-                        )
-                with b2:
-                    if st.button("Remove irrigation zone", key="savedmap_rm_irrig"):
-                        st.session_state.savedmap_irrig_count = max(1, st.session_state.savedmap_irrig_count - 1)
-
-                canon_list_saved = CANON_OUTPUT_BASE + [f"Irrigation{i}" for i in range(1, st.session_state.savedmap_irrig_count + 1)]
-
-                with st.form("edit_saved_mapping_form"):
-                    st.caption(
-                        "These selections are saved with this file and also used as your default mapping template for Quick Upload."
-                    )
-                    _, canon_to_raw, duplicates = canon_select_ui(
-                        raw_cols=raw_cols,
-                        default_canon_to_raw=saved_canon_to_raw,
-                        form_key="savedmap",
-                        canon_list=canon_list_saved,
-                    )
-                    save_map = st.form_submit_button("💾 Save mapping selections")
-
-                if save_map:
-                    if duplicates:
-                        st.error(f"Duplicate selections: {', '.join(duplicates)}")
-                    else:
-                        # 1) Try to regenerate cleaned file from stored RAW bytes
-                        raw_obj = db.get_raw_file_bytes(selected_file_id)
-                        if not raw_obj:
-                            # Older files may not have raw bytes stored yet
-                            db.upsert_file_column_map(
-                                user["id"],
-                                selected_file_id,
-                                raw_columns=raw_cols,
-                                canon_to_raw=canon_to_raw,
-                                raw_preview_rows=map_rec.get("raw_preview"),
-                            )
-                            db.set_last_upload_context(
-                                user["id"],
-                                file_id=selected_file_id,
-                                raw_columns=raw_cols,
-                                canon_to_raw=canon_to_raw,
-                            )
-                            st.warning(
-                                "Saved mapping selections, but this file was uploaded before raw-file storage was enabled, "
-                                "so the cleaned file cannot be regenerated automatically. Re-upload the original file once "
-                                "to enable live regeneration on future edits."
-                            )
-                        else:
-                            # Convert canon_to_raw -> raw_to_canon for cleaning
-                            raw_to_canon_new = {raw: canon for canon, raw in canon_to_raw.items() if raw}
-
-                            # Re-read raw file exactly like the original upload flow
-                            raw_filename = raw_obj["raw_filename"]
-                            ext = Path(raw_filename).suffix or ".csv"
-                            df_raw2, _, _, _ = load_table_from_bytes(raw_obj["bytes"], ext)
-
-                            df_clean2 = build_clean_dataframe(df_raw2, raw_to_canon_new)
-
-                            required_for_dashboard = ["Time", "AirTemp", "RH"]
-                            missing = [c for c in required_for_dashboard if c not in df_clean2.columns]
-                            if missing:
-                                st.error(
-                                    "Cannot save mapping because the regenerated cleaned file would be missing "
-                                    "required dashboard columns: " + ", ".join(missing)
-                                )
-                            else:
-                                # 2) Save mapping metadata
-                                db.upsert_file_column_map(
-                                    user["id"],
-                                    selected_file_id,
-                                    raw_columns=raw_cols,
-                                    canon_to_raw=canon_to_raw,
-                                    raw_preview_rows=map_rec.get("raw_preview"),
-                                )
-
-                                # 3) Overwrite cleaned file bytes in Neon
-                                cleaned_bytes2 = df_clean2.to_csv(index=False).encode("utf-8")
-                                db.update_file_content(selected_file_id, cleaned_bytes2)
-
-                                # 4) Persist as template for quick upload
-                                db.set_last_upload_context(
-                                    user["id"],
-                                    file_id=selected_file_id,
-                                    raw_columns=raw_cols,
-                                    canon_to_raw=canon_to_raw,
-                                )
-
-                                st.success("Saved mapping selections and regenerated the cleaned file.")
-                                st.rerun()
-
-                if map_rec.get("raw_preview"):
-                    with st.expander("Raw preview (first 10 rows from the original upload)", expanded=False):
-                        raw_prev_df = pd.DataFrame(map_rec["raw_preview"])
-                        st.dataframe(with_indexed_headers(raw_prev_df), use_container_width=True)
-
-
-# ---- Section B: New upload workflow ----
 if uploaded is not None:
-    st.divider()
-    st.subheader("New upload: map columns, generate cleaned file")
+    # ---------- New upload becomes active dataset ----------
+    active_mode = "upload"
+    raw_bytes = uploaded.getvalue()
+    raw_filename = uploaded.name
+    ext = Path(raw_filename).suffix or ".csv"
 
-    original_name = uploaded.name
-    ext = Path(original_name).suffix or ".csv"
-    file_bytes_raw = uploaded.getvalue()
+    df_raw_full, file_type, encoding_used, header_row = load_table_from_bytes(raw_bytes, ext)
+    df_raw_preview = df_raw_full
+    raw_cols = [str(c) for c in df_raw_full.columns]
+    raw_bytes_available = True
 
-    df_raw, file_type, encoding_used, header_row = load_table_from_bytes(file_bytes_raw, ext)
-    if header_row > 0:
-        st.info(f"Detected headers on row {header_row+1} (skipped {header_row} row(s) above).")
-    
-    raw_cols = [str(c) for c in df_raw.columns]
+    # stable key per upload
+    fp = hashlib.md5(raw_bytes).hexdigest()[:12]
+    active_key = f"upload_{fp}"
 
-    if file_type == "excel":
-        st.caption("Read file as Excel (.xlsx/.xls/.xlsm).")
+    # reset per-upload state when a different file is uploaded
+    if st.session_state.get("_active_upload_key") != active_key:
+        st.session_state["_active_upload_key"] = active_key
+        st.session_state.pop(f"{active_key}_file_id", None)
+        st.session_state.pop(f"{active_key}_sig", None)
+
+    active_file_id = st.session_state.get(f"{active_key}_file_id")
+
+else:
+    # ---------- Existing selection becomes active dataset ----------
+    if selected_file_id is None:
+        st.info("Upload a file above to begin, or select a previously uploaded file.", icon="⬆️")
+        st.stop()
+
+    active_mode = "existing"
+    active_file_id = selected_file_id
+    active_key = f"file_{selected_file_id}"
+
+    map_rec = db.get_file_column_map(selected_file_id) or {}
+    raw_cols = [str(c) for c in (map_rec.get("raw_columns") or [])]
+    saved_canon_to_raw = (map_rec.get("canon_to_raw") or {})
+
+    # Try to get raw bytes (needed for regeneration)
+    raw_obj = db.get_raw_file_bytes(selected_file_id)
+    if raw_obj:
+        raw_bytes_available = True
+        raw_filename = raw_obj["raw_filename"]
+        ext = Path(raw_filename).suffix or ".csv"
+        df_raw_full, _, _, _ = load_table_from_bytes(raw_obj["bytes"], ext)
+        df_raw_preview = df_raw_full
+        if not raw_cols:
+            raw_cols = [str(c) for c in df_raw_full.columns]
     else:
-        st.caption(f"Read CSV using encoding: `{encoding_used}`")
+        raw_bytes_available = False
+        # fallback preview from stored preview rows
+        if map_rec.get("raw_preview"):
+            df_raw_preview = pd.DataFrame(map_rec["raw_preview"])
+            if not raw_cols:
+                raw_cols = [str(c) for c in df_raw_preview.columns]
 
-    st.markdown("#### Original file preview (this upload)")
-    st.dataframe(with_indexed_headers(df_raw.head(10)), use_container_width=True)
+    if df_raw_preview is None or not raw_cols:
+        st.warning("No raw preview available for this dataset. Re-upload the original file to enable mapping edits.")
+        st.stop()
 
 
-    alias_table = build_alias_table()
-    auto_raw_to_canon, _, _ = map_columns(raw_cols, alias_table)
+# ---------- UI: single preview table at top ----------
+preview_ph = st.empty()
 
-    auto_canon_to_raw = {}
-    for raw, canon in auto_raw_to_canon.items():
-        auto_canon_to_raw.setdefault(canon, raw)
+# ---------- Defaults for mapping dropdowns ----------
+alias_table = build_alias_table()
+auto_raw_to_canon, _, _ = map_columns(raw_cols, alias_table)
+auto_canon_to_raw = {}
+for raw, canon in auto_raw_to_canon.items():
+    auto_canon_to_raw.setdefault(canon, raw)
 
-    default_canon_to_raw = dict(auto_canon_to_raw)
-    template = (last_ctx.get("canon_to_raw") or {})
-    for canon, raw in template.items():
+default_canon_to_raw = dict(auto_canon_to_raw)
+
+# overlay "template" from last context (if available)
+template = (last_ctx.get("canon_to_raw") or {})
+for canon, raw in template.items():
+    if raw and raw in raw_cols:
+        default_canon_to_raw[canon] = raw
+
+# overlay saved mapping for existing files
+if active_mode == "existing":
+    for canon, raw in (saved_canon_to_raw or {}).items():
         if raw and raw in raw_cols:
             default_canon_to_raw[canon] = raw
 
-    st.markdown("#### Step 1: Review and adjust column mapping")
-    st.caption(
-        "Defaults come from automatic matching, but your most recently saved mapping selections "
-        "are used when they match this dataset."
-    )
+# irrigation zones count
+irrig_state_key = f"{active_key}_irrig_count"
+if irrig_state_key not in st.session_state:
+    inferred = 1
+    for i in range(1, MAX_IRRIGATION_ZONES + 1):
+        if (default_canon_to_raw or {}).get(f"Irrigation{i}"):
+            inferred = i
+    st.session_state[irrig_state_key] = inferred
 
-    # ---------- Irrigation UI state (New upload) ----------
-    if "newupload_irrig_count" not in st.session_state:
-        inferred = 1
-        for i in range(1, MAX_IRRIGATION_ZONES + 1):
-            if (template or {}).get(f"Irrigation{i}"):
-                inferred = i
-        st.session_state.newupload_irrig_count = inferred
 
-    b1, b2 = st.columns([1, 1])
-    with b1:
-        if st.button("Add irrigation zone", key="newupload_add_irrig"):
-            st.session_state.newupload_irrig_count = min(
-                MAX_IRRIGATION_ZONES, st.session_state.newupload_irrig_count + 1
+canon_list = CANON_UI_BASE + [f"Irrigation{i}" for i in range(1, st.session_state[irrig_state_key] + 1)]
+
+st.markdown("#### Select mapped column names")
+st.caption("Your selections update the preview immediately. Dashboard updates occur automatically once required columns are mapped.")
+
+raw_to_canon, canon_to_raw, duplicates = canon_select_ui(
+    raw_cols=raw_cols,
+    default_canon_to_raw=default_canon_to_raw,
+    form_key=f"map_{active_key}",
+    canon_list=canon_list,
+)
+
+# update the single preview table (with top mapping row)
+preview_ph.dataframe(
+    preview_table_with_mapping_row(df_raw_preview, raw_cols, canon_to_raw),
+    width='stretch',
+)
+
+if duplicates:
+    st.error("Duplicate selections: " + ", ".join(duplicates))
+    st.stop()
+
+# ---------- AUTO-SAVE + AUTO-REGENERATE ----------
+sig_key = f"{active_key}_sig"
+current_sig = mapping_signature(canon_list, canon_to_raw)
+prev_sig = st.session_state.get(sig_key)
+
+if prev_sig is None:
+    # first render: initialize only
+    st.session_state[sig_key] = current_sig
+else:
+    if current_sig != prev_sig:
+        # Always build clean df from FULL raw data if we can
+        if df_raw_full is None:
+            # Can't regenerate without full df/raw bytes, but for existing we can still persist mapping
+            if active_mode == "existing":
+                db.upsert_file_column_map(
+                    user["id"],
+                    active_file_id,
+                    raw_columns=raw_cols,
+                    canon_to_raw=canon_to_raw,
+                    raw_preview_rows=df_raw_preview.head(10).where(pd.notnull(df_raw_preview.head(10)), None).to_dict(orient="records"),
+                )
+                db.set_last_upload_context(user["id"], file_id=active_file_id, raw_columns=raw_cols, canon_to_raw=canon_to_raw)
+                st.toast("Mapping saved. Re-upload this dataset once to enable dashboard regeneration.", icon="⚠️")
+            st.session_state[sig_key] = current_sig
+            st.stop()
+
+        df_clean = build_clean_dataframe(df_raw_full, raw_to_canon)
+        missing = missing_required_cols(df_clean)
+
+        # If we have a file_id already, save mapping progress immediately
+        if active_file_id is not None:
+            db.upsert_file_column_map(
+                user["id"],
+                active_file_id,
+                raw_columns=raw_cols,
+                canon_to_raw=canon_to_raw,
+                raw_preview_rows=df_raw_full.head(10).where(pd.notnull(df_raw_full.head(10)), None).to_dict(orient="records"),
             )
-    with b2:
-        if st.button("Remove irrigation zone", key="newupload_rm_irrig"):
-            st.session_state.newupload_irrig_count = max(1, st.session_state.newupload_irrig_count - 1)
+            db.set_last_upload_context(user["id"], file_id=active_file_id, raw_columns=raw_cols, canon_to_raw=canon_to_raw)
 
-    canon_list_new = CANON_UI_BASE + [f"Irrigation{i}" for i in range(1, st.session_state.newupload_irrig_count + 1)]
-
-    with st.form("new_upload_mapping_form"):
-        raw_to_canon, canon_to_raw, duplicates = canon_select_ui(
-            raw_cols=raw_cols,
-            default_canon_to_raw=default_canon_to_raw,
-            form_key="newupload",
-            canon_list=canon_list_new,
-        )
-        submitted = st.form_submit_button("✅ Generate cleaned file and save to Neon")
-
-    if submitted:
-        if duplicates:
-            st.error(f"Duplicate selections: {', '.join(duplicates)}")
-            st.stop()
-
-        if not raw_to_canon:
-            st.warning("No columns were mapped. Please select at least one column and try again.")
-            st.stop()
-
-        df_clean = build_clean_dataframe(df_raw, raw_to_canon)
-
-        required_for_dashboard = ["Time", "AirTemp", "RH"]
-        missing = [c for c in required_for_dashboard if c not in df_clean.columns]
         if missing:
-            st.error("Missing required dashboard columns: " + ", ".join(missing))
+            # Warning banner (no dashboard update yet)
+            show_incomplete_mapping_warning(missing)
+            st.session_state[sig_key] = current_sig
             st.stop()
 
-        if "Time" in df_clean.columns and not df_clean["Time"].isna().all():
-            data_start = df_clean["Time"].min()
-            data_start_str = data_start.strftime("%Y%m%dT%H%M")
-        else:
-            data_start_str = time.strftime("%Y%m%dT%H%M", time.gmtime())
-
-        uname = username_slug(user)
-
-        orig_stem = Path(uploaded.name).stem
-        orig_stem = re.sub(r"\s+", "_", orig_stem)
-        orig_stem = re.sub(r"[^A-Za-z0-9_-]+", "", orig_stem)
-        orig_stem = re.sub(r"_+", "_", orig_stem).strip("_") or "file"
-
-        stored_filename = f"{orig_stem}_{uname}.csv"
-
+        # Mapping is valid — create/update dashboard file automatically
         cleaned_bytes = df_clean.to_csv(index=False).encode("utf-8")
-        file_id = db.add_file_record(
-            user["id"],
-            stored_filename,
-            cleaned_bytes,
-            raw_filename=original_name,
-            raw_bytes=file_bytes_raw,
-        )
 
-        db.upsert_file_column_map(
-            user["id"],
-            file_id,
-            raw_columns=raw_cols,
-            canon_to_raw=canon_to_raw,
-            raw_preview_rows=df_raw.head(10).where(pd.notnull(df_raw.head(10)), None).to_dict(orient="records"),
-        )
+        if active_mode == "upload" and active_file_id is None:
+            # Create file record now that mapping is valid
+            uname = username_slug(user)
 
-        db.set_last_upload_context(
-            user["id"],
-            file_id=file_id,
-            raw_columns=raw_cols,
-            canon_to_raw=canon_to_raw,
-        )
+            orig_stem = Path(raw_filename).stem
+            orig_stem = re.sub(r"\s+", "_", orig_stem)
+            orig_stem = re.sub(r"[^A-Za-z0-9_-]+", "", orig_stem)
+            orig_stem = re.sub(r"_+", "_", orig_stem).strip("_") or "file"
 
-        st.success(f"Saved cleaned file in Neon as `{stored_filename}`.")
+            stored_filename = f"{orig_stem}_{uname}.csv"
 
-        st.markdown("#### Cleaned & mapped file preview")
-        st.dataframe(df_clean.head(10), use_container_width=True)
-        st.caption(f"Detected columns: {', '.join(df_clean.columns)}")
+            active_file_id = db.add_file_record(
+                user["id"],
+                stored_filename,
+                cleaned_bytes,
+                raw_filename=raw_filename,
+                raw_bytes=raw_bytes,
+            )
+            st.session_state[f"{active_key}_file_id"] = active_file_id
 
-        st.download_button(
-            "⬇️ Download cleaned CSV",
-            data=cleaned_bytes,
-            file_name=stored_filename,
-            mime="text/csv",
-        )
+            # persist mapping metadata + template
+            db.upsert_file_column_map(
+                user["id"],
+                active_file_id,
+                raw_columns=raw_cols,
+                canon_to_raw=canon_to_raw,
+                raw_preview_rows=df_raw_full.head(10).where(pd.notnull(df_raw_full.head(10)), None).to_dict(orient="records"),
+            )
+            db.set_last_upload_context(user["id"], file_id=active_file_id, raw_columns=raw_cols, canon_to_raw=canon_to_raw)
+
+            st.toast("Dashboard file created and updated.", icon="✅")
+            st.session_state[sig_key] = current_sig
+            st.rerun()
+
+        else:
+            # Existing file OR already-created upload file: update dashboard bytes
+            if active_mode == "existing" and not raw_bytes_available:
+                st.warning("Cannot update dashboard file because raw bytes are not available. Re-upload the original file once.", icon="⚠️")
+            else:
+                db.update_file_content(active_file_id, cleaned_bytes)
+                st.toast("Dashboard file updated.", icon="✅")
+
+            st.session_state[sig_key] = current_sig
+
+b1, b2 = st.columns([1, 1])
+with b1:
+    if st.button("Add irrigation zone", key=f"{active_key}_add_irrig"):
+        st.session_state[irrig_state_key] = min(MAX_IRRIGATION_ZONES, st.session_state[irrig_state_key] + 1)
+        st.rerun()
+with b2:
+    if st.button("Remove irrigation zone", key=f"{active_key}_rm_irrig"):
+        st.session_state[irrig_state_key] = max(1, st.session_state[irrig_state_key] - 1)
+        st.rerun()

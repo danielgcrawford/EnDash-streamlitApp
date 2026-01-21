@@ -11,7 +11,7 @@ import json
 import math
 from datetime import datetime, date
 
-# We still keep a local data directory for any temporary files if needed
+#Keep a local data directory for any temporary files if needed
 ROOT = Path(__file__).resolve().parents[1]
 DATA_DIR = ROOT / "data"
 DATA_DIR.mkdir(parents=True, exist_ok=True)

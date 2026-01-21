@@ -305,7 +305,7 @@ with st.form("settings_form"):
         irrigation_trigger_input = st.number_input(
             "Irrigation Trigger (ON when value ≥ trigger)",
             value=float(irrigation_trigger),
-            min_value=0.1,      # per your requirement: default and minimum >= 1
+            min_value=0.1,      # default and minimum >= 1
             step=0.1,
             format="%.1f",
             help="Your irrigation column is numeric: 0 = off, values ≥ trigger = on.",
