@@ -125,6 +125,121 @@ def make_arrow_safe_for_preview(df: pd.DataFrame) -> pd.DataFrame:
     # fallback for older pandas: apply column-wise map
     return df.apply(lambda s: s.map(_cell))
 
+#New HTML Table
+import html
+import math
+
+def _cell_to_text(x) -> str:
+    """Safe string conversion for HTML rendering (handles bytes, NaN)."""
+    if x is None or (isinstance(x, float) and pd.isna(x)) or pd.isna(x):
+        return ""
+    if isinstance(x, (bytes, bytearray, memoryview)):
+        try:
+            return bytes(x).decode("utf-8", errors="replace")
+        except Exception:
+            return str(x)
+    return str(x)
+
+def wrap_text_every_n_chars(s: str, n: int, max_lines: int | None = None) -> str:
+    """
+    Insert <br> every n characters (hard wrap).
+    If max_lines is provided, it will cap the number of lines (remaining text stays on last line).
+    """
+    if n <= 0:
+        return s
+    if len(s) <= n:
+        return s
+
+    chunks = [s[i:i+n] for i in range(0, len(s), n)]
+    if max_lines is not None and len(chunks) > max_lines:
+        # merge remainder into last line
+        chunks = chunks[:max_lines-1] + ["".join(chunks[max_lines-1:])]
+    return "<br>".join(chunks)
+
+def wrap_text_into_k_lines(s: str, k: int) -> str:
+    """
+    Split into ~k equal-length lines by inserting <br>.
+    k lines regardless of string length.
+    """
+    if k <= 1:
+        return s
+    n = max(1, math.ceil(len(s) / k))
+    return wrap_text_every_n_chars(s, n, max_lines=k)
+
+def dataframe_to_wrapped_header_html(
+    df: pd.DataFrame,
+    *,
+    header_wrap_mode: str = "css",   # "css" | "nchars" | "klines"
+    wrap_nchars: int = 12,
+    wrap_klines: int = 3,
+    max_rows: int = 6,
+    sticky_header: bool = True,
+    sticky_first_col: bool = True,
+    show_tooltips: bool = True,
+) -> str:
+    """
+    Render df as an HTML table where headers can be wrapped.
+    header_wrap_mode:
+      - "css": let CSS wrap naturally (best general option)
+      - "nchars": insert <br> every wrap_nchars characters
+      - "klines": insert <br> to force wrap_klines lines (approx equal length)
+    """
+    d = df.head(max_rows).copy()
+
+    # Build header cells
+    ths = []
+    for col in d.columns:
+        col_raw = _cell_to_text(col)
+        col_escaped = html.escape(col_raw)
+
+        if header_wrap_mode == "nchars":
+            col_display = wrap_text_every_n_chars(col_escaped, wrap_nchars)
+        elif header_wrap_mode == "klines":
+            col_display = wrap_text_into_k_lines(col_escaped, wrap_klines)
+        else:
+            col_display = col_escaped  # CSS wrap will handle it
+
+        title_attr = f' title="{col_escaped}"' if show_tooltips else ""
+        ths.append(f"<th{title_attr}>{col_display}</th>")
+
+    thead = "<thead><tr>" + "".join(ths) + "</tr></thead>"
+
+    # Build body rows
+    rows = []
+    for row_idx, r in d.iterrows():
+        is_mapping_row = (str(row_idx) == "Mapped as")
+
+        tds = []
+        for col in d.columns:
+            val_raw = _cell_to_text(r[col])
+            val_esc = html.escape(val_raw)
+
+            # If this is the mapping row, make mapped cells green (anything not "(None)")
+            if is_mapping_row and val_raw.strip() and val_raw.strip() != "(None)":
+                tds.append(f'<td class="mapped-cell">{val_esc}</td>')
+            else:
+                tds.append(f"<td>{val_esc}</td>")
+
+        # Add a class to the whole row too (optional, but nice if you want to style row background later)
+        row_class = ' class="mapping-row"' if is_mapping_row else ""
+        rows.append(f"<tr{row_class}>" + "".join(tds) + "</tr>")
+    tbody = "<tbody>" + "".join(rows) + "</tbody>"
+
+    # Add classes for sticky behavior
+    classes = ["preview-table"]
+    if sticky_header:
+        classes.append("sticky-header")
+    if sticky_first_col:
+        classes.append("sticky-first-col")
+
+    return f"""
+<div class="table-wrap">
+  <table class="{' '.join(classes)}">
+    {thead}
+    {tbody}
+  </table>
+</div>
+"""
 
 # ------------- Canonical mapping helpers -------------
 
@@ -725,6 +840,75 @@ else:
         st.warning("No raw preview available for this dataset. Re-upload the original file to enable mapping edits.")
         st.stop()
 
+st.markdown("""
+<style>
+.table-wrap{
+  overflow-x: auto;
+  border: 1px solid rgba(49,51,63,0.2);
+  border-radius: 10px;
+}
+
+.preview-table{
+  border-collapse: collapse;
+  width: 100%;
+  table-layout: fixed; /* makes wrapping predictable */
+}
+
+.preview-table th, .preview-table td{
+  padding: 6px 8px;
+  border-bottom: 1px solid rgba(49,51,63,0.12);
+  font-size: 14px;
+}
+
+.preview-table th{
+  font-weight: 600;
+  white-space: normal;      /* enable wrapping */
+  word-break: break-word;   /* wrap long strings */
+  overflow-wrap: anywhere;  /* wrap even without spaces */
+  line-height: 1.15;
+  vertical-align: bottom;
+  background: rgba(240,242,246,0.6);
+}
+
+.preview-table td{
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;  /* keep body compact */
+}
+
+/* Sticky header */
+.preview-table.sticky-header thead th{
+  position: sticky;
+  top: 0;
+  z-index: 2;
+}
+
+/* Sticky first column (optional) */
+.preview-table.sticky-first-col th:first-child,
+.preview-table.sticky-first-col td:first-child{
+  position: sticky;
+  left: 0;
+  z-index: 3;
+  background: rgba(240,242,246,0.95);
+}
+
+/* Slightly different background for first col body */
+.preview-table.sticky-first-col td:first-child{
+  background: rgba(255,255,255,0.95);
+}
+
+/* text color green for mapped columns */       
+.preview-table td.mapped-cell{
+  color: #1f9d55;          /* green */
+  font-weight: 700;
+}
+
+/* make mapping row stand out w background */
+.preview-table tr.mapping-row td{
+  background: rgba(31,157,85,0.06);
+}
+</style>
+""", unsafe_allow_html=True)
 
 # ---------- UI: single preview table at top ----------
 preview_ph = st.empty()
@@ -772,11 +956,19 @@ raw_to_canon, canon_to_raw, duplicates = canon_select_ui(
     canon_list=canon_list,
 )
 
-# update the single preview table (with top mapping row)
-preview_ph.dataframe(
-    preview_table_with_mapping_row(df_raw_preview, raw_cols, canon_to_raw),
-    width='stretch',
+preview_df = preview_table_with_mapping_row(df_raw_preview, raw_cols, canon_to_raw)
+
+html_table = dataframe_to_wrapped_header_html(
+    preview_df,
+    header_wrap_mode="css",     # <-- simplest + best
+    max_rows=12,
+    sticky_header=True,
+    sticky_first_col=True,
+    show_tooltips=True,
 )
+
+preview_ph.markdown(html_table, unsafe_allow_html=True)
+
 
 if duplicates:
     st.error("Duplicate selections: " + ", ".join(duplicates))
