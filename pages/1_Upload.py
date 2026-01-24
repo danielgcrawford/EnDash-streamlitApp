@@ -220,7 +220,7 @@ def dataframe_to_wrapped_header_html(
             else:
                 tds.append(f"<td>{val_esc}</td>")
 
-        # Add a class to the whole row too (optional, but nice if you want to style row background later)
+        # Add a class to the whole row 
         row_class = ' class="mapping-row"' if is_mapping_row else ""
         rows.append(f"<tr{row_class}>" + "".join(tds) + "</tr>")
     tbody = "<tbody>" + "".join(rows) + "</tbody>"

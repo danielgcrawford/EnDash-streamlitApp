@@ -407,7 +407,8 @@ def legend_below(ax, fig, ncol=3, y=-0.30):
         fontsize=9,
     )
     # Make room at the bottom for the legend
-    fig.subplots_adjust(bottom=0.25)
+    fig.subplots_adjust(bottom=0.28)
+    
 
 def plot_separator():
     """
@@ -723,11 +724,11 @@ if not user:
 col1, col2, col3 = st.columns(3, gap="medium")
 
 with col1:
-    if st.button("📂 Manual Upload", width="stretch"):
+    if st.button("📂 Data File Settings", width="stretch"):
         st.switch_page("pages/1_Upload.py")
 
 with col2:
-    if st.button("⚙️ Edit Settings", width="stretch"):
+    if st.button("⚙️ Climate Units & Setpoints", width="stretch"):
         st.switch_page("pages/2_Settings.py")
 
 with col3:

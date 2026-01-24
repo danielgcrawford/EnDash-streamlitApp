@@ -15,7 +15,7 @@ auth.require_login()
 user = auth.current_user()
 auth.render_sidebar()
 
-st.title("⚙️ Settings & Setpoints")
+st.title("⚙️ Climate Units & Setpoints")
 
 st.markdown(
     """
