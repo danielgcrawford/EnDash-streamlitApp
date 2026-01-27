@@ -74,7 +74,8 @@ def init_db() -> None:
             irrigation_trigger          REAL DEFAULT 1.0,
             irrigation_min_interval_min REAL DEFAULT 7.0,
             irrigation_sensitivity_pct  REAL DEFAULT 3.0,
-            leaf_wetness_min_interval_min REAL DEFAULT 7.0
+            leaf_wetness_min_interval_min REAL DEFAULT 7.0,
+            water_applied_per_event_ml_m2 REAL DEFAULT 0.0
         );
         """
     )
@@ -121,6 +122,8 @@ def init_db() -> None:
         cur.execute("ALTER TABLE settings ADD COLUMN irrigation_sensitivity_pct REAL DEFAULT 3.0;")
     if "leaf_wetness_min_interval_min" not in existing_cols:
         cur.execute("ALTER TABLE settings ADD COLUMN leaf_wetness_min_interval_min REAL DEFAULT 7.0;")
+    if "water_applied_per_event_ml_m2" not in existing_cols:
+        cur.execute("ALTER TABLE settings ADD COLUMN water_applied_per_event_ml_m2 REAL DEFAULT 0.0;")
 
     # Persist Upload page state across sessions (last viewed file + mapping template)
     if "last_upload_file_id" not in existing_cols:
@@ -281,6 +284,7 @@ def update_settings(
     leaf_wetness_unit: str,
     irrigation_sensitivity_pct: float,
     leaf_wetness_min_interval_min: float,
+    water_applied_per_event_ml_m2: float,
 ) -> None:
     conn = get_conn()
     cur = conn.cursor()
@@ -303,7 +307,8 @@ def update_settings(
             irrigation_min_interval_min = %s,
             leaf_wetness_unit = %s,
             irrigation_sensitivity_pct = %s,
-            leaf_wetness_min_interval_min = %s
+            leaf_wetness_min_interval_min = %s,
+            water_applied_per_event_ml_m2 = %s
         WHERE user_id = %s;
         """,
         (
@@ -323,6 +328,7 @@ def update_settings(
             leaf_wetness_unit,
             irrigation_sensitivity_pct,
             leaf_wetness_min_interval_min,
+            water_applied_per_event_ml_m2,
             user_id,
         ),
     )

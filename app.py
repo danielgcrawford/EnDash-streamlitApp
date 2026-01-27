@@ -1004,6 +1004,7 @@ target_vpd_high = float(settings.get("target_vpd_high", 1.5))
 
 irrigation_trigger = float(settings.get("irrigation_trigger", 1.0)) #ON if value >= trigger
 irrigation_min_interval_min = float(settings.get("irrigation_min_interval_min", 7.0))   #minutes
+water_applied_per_event_ml_m2 = float(settings.get("water_applied_per_event_ml_m2", 10))
 
 leaf_wetness_unit = settings.get("leaf_wetness_unit", "Percent")
 irrigation_sensitivity_pct = float(settings.get("irrigation_sensitivity_pct", 3.0))
@@ -1335,6 +1336,26 @@ if numeric_cols:
         )
         summary = pd.concat([summary, lw_row], axis=0)
     
+    # ---- Add Water Applied per Day rows  ----
+    if water_applied_per_event_ml_m2 > 0:
+        # Based on irrigation events/day 
+        if events_total is not None and not events_total.empty:
+            wapd = events_total.astype(float) * float(water_applied_per_event_ml_m2)
+            wapd_row = pd.DataFrame(
+                {"Min": [float(wapd.min())], "Average": [float(wapd.mean())], "Max": [float(wapd.max())]},
+                index=["Water Applied per Day (mL/m²·day)"],
+            )
+            summary = pd.concat([summary, wapd_row], axis=0)
+
+        # Based on leaf wetness events/day
+        if leafwetness_daily_counts is not None and not leafwetness_daily_counts.empty:
+            wapd_lw = leafwetness_daily_counts.astype(float) * float(water_applied_per_event_ml_m2)
+            wapd_lw_row = pd.DataFrame(
+                {"Min": [float(wapd_lw.min())], "Average": [float(wapd_lw.mean())], "Max": [float(wapd_lw.max())]},
+                index=["Water Applied per Day (mL/m²·day) - Leaf Wetness"],
+            )
+            summary = pd.concat([summary, wapd_lw_row], axis=0)
+
     # --- Display formatting: per-row decimals + PPFD Min/Average as "-" ---
     ppfd_label = "Light Intensity (PPFD - µmol m⁻² s⁻¹)"
 
@@ -1352,6 +1373,8 @@ if numeric_cols:
         if "Temperature" in row_label:
             return "{:.0f}"
         if "Leaf Wetness" in row_label:
+            return "{:.0f}"
+        if "Water Applied" in row_label:
             return "{:.0f}"
         return "{:.1f}"
 
@@ -1814,7 +1837,7 @@ day_to_plot_lw = None
 
 full_days_lw = []
 if use_time_axis and "Time" in df_display.columns and df_display["Time"].notna().any():
-    full_days_lw = find_full_days(df_display["Time"])  # same helper used for LW full-day bars【turn2file4†L40-L47】
+    full_days_lw = find_full_days(df_display["Time"])  # same helper used for LW full-day bars
 
 # Build dropdown options (strings) for stable widget behavior
 lw_day_options = [pd.to_datetime(d).strftime("%Y-%m-%d") for d in full_days_lw] if full_days_lw else []
@@ -1887,9 +1910,9 @@ if use_time_axis and "LeafWetness" in df_display.columns and day_to_plot_lw is n
             )
 
         save_lw_settings = False
-        
+
         with st.form("lw_inline_settings_form", clear_on_submit=False):
-            st.markdown("##### Leaf wetness irrigation detection settings")
+            st.markdown("##### Leaf Wetness Settings")
             st.caption(
                 "Fine-tune the Leaf Wetness graph above."
             )

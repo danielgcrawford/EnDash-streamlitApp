@@ -51,6 +51,7 @@ DEFAULT_TARGET_VPD_HIGH = 0.8
 # IRRIGATION EVENT DETECTION 
 DEFAULT_IRRIGATION_TRIGGER = 1.0    #irrigation ON when value >= this
 DEFAULT_IRRIGATION_MIN_INTERVAL_MIN = 7.0   #minimum minutes between counted events
+DEFAULT_WATER_APPLIED_PER_EVENT_ML_M2 = 10.0  #mL per sqmeter per irrigation event
 
 # LEAF WETNESS IRRIGATION DETECTION
 DEFAULT_LEAF_WETNESS_UNIT = "Percent"
@@ -81,6 +82,7 @@ target_vpd_high = float(settings.get("target_vpd_high", DEFAULT_TARGET_VPD_HIGH)
 
 irrigation_trigger = float(settings.get("irrigation_trigger", DEFAULT_IRRIGATION_TRIGGER))
 irrigation_min_interval_min = float(settings.get("irrigation_min_interval_min", DEFAULT_IRRIGATION_MIN_INTERVAL_MIN))
+water_applied_per_event_ml_m2 = float(settings.get("water_applied_per_event_ml_m2", DEFAULT_WATER_APPLIED_PER_EVENT_ML_M2))
 
 leaf_wetness_unit = settings.get("leaf_wetness_unit", DEFAULT_LEAF_WETNESS_UNIT)
 irrigation_sensitivity_pct = float(settings.get("irrigation_sensitivity_pct", DEFAULT_IRRIGATION_SENSITIVITY_PCT))
@@ -324,6 +326,16 @@ with st.form("settings_form"):
             ),
         )
 
+    # --- Water applied per event ---
+    water_applied_per_event_ml_m2_input = st.number_input(
+        "Water Applied per Irrigation Event (mL/m²)",
+        min_value=0.0,
+        step=1.0,
+        value=float(water_applied_per_event_ml_m2),
+        format="%.0f",
+        help="Used to calculate Water Applied per Day in Summary Statistics."
+    )
+
     st.subheader("Leaf Wetness")
     st.caption(
         "These settings control how EnDash converts Leaf Wetness into irrigation signals."
@@ -391,6 +403,7 @@ if save_btn:
             leaf_wetness_unit=leaf_wetness_unit_input,
             irrigation_sensitivity_pct=float(irrigation_sensitivity_pct_input),
             leaf_wetness_min_interval_min=float(leaf_wetness_min_interval_input),
+            water_applied_per_event_ml_m2=float(water_applied_per_event_ml_m2_input),
         )
 
         st.success("Your personal units and setpoints have been saved and will be used on the dashboard.")
