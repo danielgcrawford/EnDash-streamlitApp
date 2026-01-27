@@ -1804,19 +1804,34 @@ LEAF_WETNESS_YLABEL = {
     "milliVolts": "Leaf Wetness (mV)",
 }.get(leaf_wetness_unit, "Leaf Wetness")
 
-# Choose a "day to plot" for leaf wetness EVEN if no irrigation zones exist.
+# Choose a "day to plot" for leaf wetness.
 # Priority:
-#   1) use day_to_plot from irrigation section (if it exists),
-#   2) else use the most recent "full day" in the dataset,
-#   3) else fall back to the most recent date present.
+#   1) user's Day to Graph dropdown (full days only; NOT saved to DB)
+#   2) day_to_plot from irrigation section (if it exists),
+#   3) else the most recent "full day" in the dataset,
+#   4) else the most recent date present.
 day_to_plot_lw = None
-if "day_to_plot" in locals() and day_to_plot is not None:
-    day_to_plot_lw = pd.to_datetime(day_to_plot)
-elif use_time_axis and "Time" in df_display.columns and df_display["Time"].notna().any():
-    full_days_lw = find_full_days(df_display["Time"])
-    if full_days_lw:
+
+full_days_lw = []
+if use_time_axis and "Time" in df_display.columns and df_display["Time"].notna().any():
+    full_days_lw = find_full_days(df_display["Time"])  # same helper used for LW full-day bars【turn2file4†L40-L47】
+
+# Build dropdown options (strings) for stable widget behavior
+lw_day_options = [pd.to_datetime(d).strftime("%Y-%m-%d") for d in full_days_lw] if full_days_lw else []
+lw_day_key = "dash_leaf_wetness_day_to_graph"
+
+# If user has selected a day previously, use it (as long as it is still a valid full day)
+lw_day_selected = st.session_state.get(lw_day_key, None)
+if lw_day_selected in lw_day_options:
+    day_to_plot_lw = pd.to_datetime(lw_day_selected)
+
+# Otherwise fall back to the previous behavior
+if day_to_plot_lw is None:
+    if "day_to_plot" in locals() and day_to_plot is not None:
+        day_to_plot_lw = pd.to_datetime(day_to_plot)
+    elif full_days_lw:
         day_to_plot_lw = pd.to_datetime(full_days_lw[-1])
-    else:
+    elif use_time_axis and "Time" in df_display.columns and df_display["Time"].notna().any():
         day_to_plot_lw = pd.to_datetime(df_display["Time"].max()).normalize()
 
 if use_time_axis and "LeafWetness" in df_display.columns and day_to_plot_lw is not None:
@@ -1851,12 +1866,32 @@ if use_time_axis and "LeafWetness" in df_display.columns and day_to_plot_lw is n
         # Inline Leaf Wetness irrigation detection settings
         # (Same intent as Settings page; saved per-user to DB and reruns)
         # ------------------------------------------------------------
+        # --- Day to Graph (auto-updates plot; NOT saved) ---
+        if lw_day_options:
+            if (lw_day_key not in st.session_state) or (st.session_state[lw_day_key] not in lw_day_options):
+                st.session_state[lw_day_key] = lw_day_options[-1]
+
+            st.selectbox(
+                "Day to Graph",
+                options=lw_day_options,
+                key=lw_day_key,
+                help="Select a full day of data to display in the Leaf Wetness (24hr) graph. Not saved to the database.",
+            )
+        else:
+            st.selectbox(
+                "Day to Graph",
+                options=[],
+                disabled=True,
+                key=lw_day_key,
+                help="No full days detected in this dataset.",
+            )
+
         save_lw_settings = False
+        
         with st.form("lw_inline_settings_form", clear_on_submit=False):
             st.markdown("##### Leaf wetness irrigation detection settings")
             st.caption(
-                "These settings control how Leaf Wetness is converted into irrigation events "
-                "and will update the dashboard calculations/graphs after saving."
+                "Fine-tune the Leaf Wetness graph above."
             )
 
             c1, c2 = st.columns(2)
@@ -1882,7 +1917,7 @@ if use_time_axis and "LeafWetness" in df_display.columns and day_to_plot_lw is n
                     help="Minimum minutes between counted irrigation events derived from Leaf Wetness.",
                     key="dash_leaf_wetness_min_interval_min",
                 )
-
+            
             save_lw_settings = st.form_submit_button("💾 Save leaf wetness settings")
 
         if save_lw_settings:
