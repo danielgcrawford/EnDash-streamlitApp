@@ -1539,7 +1539,7 @@ if summary is not None:
 numeric_cols_no_par = numeric_cols[:]
 if "PAR" in numeric_cols:
     fig, ax1 = plt.subplots(figsize=(8, 3))
-    ax1.set_ylabel("PPFD (µmol m⁻² s⁻¹)")
+    ax1.set_ylabel("PPFD (µmol m⁻² s⁻¹)", color="tab:blue")
     ax1.set_title("Light Intensity and Daily Light Integral")
     ax2 = ax1.twinx()
     ax2.set_zorder(0)
@@ -1587,7 +1587,7 @@ if "PAR" in numeric_cols:
             label=f"Target DLI ({target_dli:.1f})",
         )
 
-    ax2.set_ylabel("DLI (mol m⁻² d⁻¹)")
+    ax2.set_ylabel("DLI (mol m⁻² d⁻¹)", color="tab:orange")
 
     if use_time_axis:
         ax1.set_xlabel("Time")
@@ -1707,14 +1707,14 @@ for col in numeric_cols_no_par:
             color="red",
             linestyle="--",
             linewidth=1.0,
-            label=f"Target high temperature ({target_temp_high:.1f})",
+            label=f"Target high temperature ({target_temp_high:.0f})",
         )
         ax.axhline(
             target_temp_low,
             color="blue",
             linestyle="--",
             linewidth=1.0,
-            label=f"Target low temperature ({target_temp_low:.1f})",
+            label=f"Target low temperature ({target_temp_low:.0f})",
         )
 
 
