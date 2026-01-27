@@ -391,7 +391,7 @@ def apply_time_axis_formatting(ax, fig, x_values):
     fig.autofmt_xdate(rotation=30, ha="right")
 
 
-def legend_below(ax, fig, ncol=3, y=-0.30):
+def legend_below(ax, fig, ncol=3, y=-0.50):
     """
     Put the legend below the axes so it doesn't overlap data.
     """
@@ -414,9 +414,9 @@ def plot_separator():
     """
     Add a visual break (space + line) between plots on the Streamlit page.
     """
-    st.markdown("<div style='margin: 1.25rem 0;'></div>", unsafe_allow_html=True)
+    #st.markdown("<div style='margin: 1.25rem 0;'></div>", unsafe_allow_html=True)
     st.divider()
-    st.markdown("<div style='margin: 1.25rem 0;'></div>", unsafe_allow_html=True)
+    #st.markdown("<div style='margin: 1.25rem 0;'></div>", unsafe_allow_html=True)
 
 #Naming
 def pretty_label(col: str, temp_unit: str) -> str:
@@ -434,6 +434,8 @@ def pretty_label(col: str, temp_unit: str) -> str:
         return "Leaf Vapor Pressure Deficit (kPa)"
     if col == "VPDair":
         return "Air Vapor Pressure Deficit (kPa)"
+    if col == "LeafWetness":
+        return "Leaf Wetness"
     return col
 
 
@@ -1337,7 +1339,7 @@ if numeric_cols:
     ppfd_label = "Light Intensity (PPFD - µmol m⁻² s⁻¹)"
 
     def row_format_spec(row_label: str) -> str:
-        if "Irrigation Events per Day" in row_label:
+        if "Events per Day" in row_label:
             return "{:.0f}"
         if "Relative Humidity" in row_label:
             return "{:.0f}"
@@ -1348,6 +1350,8 @@ if numeric_cols:
         if "Daily Light Integral" in row_label:
             return "{:.1f}"
         if "Temperature" in row_label:
+            return "{:.0f}"
+        if "Leaf Wetness" in row_label:
             return "{:.0f}"
         return "{:.1f}"
 
@@ -1615,7 +1619,7 @@ if "PAR" in numeric_cols:
     ax1.legend(
         handles_sorted, labels_sorted,
         loc="upper center",
-        bbox_to_anchor=(0.5, -0.33),
+        bbox_to_anchor=(0.5, -0.50),
         ncol=2,          # keeps a compact layout; works for 2 or 4 items
         frameon=True,
         fontsize=9,
@@ -1727,7 +1731,7 @@ for col in numeric_cols_no_par:
         )
         
 
-    legend_below(ax, fig, ncol=3, y=-0.33) #Set number of columns in time series graph legend
+    legend_below(ax, fig, ncol=3, y=-0.5) #Set number of columns in time series graph legend
     #ax.grid(True, linestyle=":", linewidth=0.5)
     
     st.pyplot(fig)
@@ -1759,7 +1763,7 @@ if use_time_axis and events_by_zone is not None and not events_by_zone.empty:
         ax_ir.bar(x, events_by_zone[col].values, width=width * 0.95, align="center", label=col)
 
     apply_time_axis_formatting(ax_ir, fig_ir, events_by_zone.index)
-    legend_below(ax_ir, fig_ir, ncol=min(3, n), y=-0.33)
+    #legend_below(ax_ir, fig_ir, ncol=min(3, n), y=-0.5)
 
     st.pyplot(fig_ir)
     plot_separator()
@@ -1839,7 +1843,7 @@ if use_time_axis and "LeafWetness" in df_display.columns and day_to_plot_lw is n
         ax_lw.set_ylabel(LEAF_WETNESS_YLABEL)
 
         apply_time_axis_formatting(ax_lw, fig_lw, df_lw_day["Time"])
-        legend_below(ax_lw, fig_lw, ncol=2, y=-0.33)
+        legend_below(ax_lw, fig_lw, ncol=2, y=-0.5)
 
         st.pyplot(fig_lw)
 
