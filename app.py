@@ -1356,11 +1356,38 @@ if numeric_cols:
             )
             summary = pd.concat([summary, wapd_lw_row], axis=0)
 
+    def label_with_icon(label: str) -> str:
+        """
+        Add an emoji icon prefix based on the row label text.
+        Order matters (more specific rules first).
+        """
+        rules = [
+            ("Events per Day", "🚿"),            # irrigation events/day
+            ("Water Applied", "💧"),                   # water applied/day
+            ("Daily Light Integral", "🌤️"),      # DLI
+            ("Light Intensity", "💡"),           # PPFD
+            ("Vapor Pressure Deficit", "🍃"),    # VPD
+            ("Relative Humidity", "💦"),         # RH
+            ("Leaf Temperature", "🍂"),
+            ("Temperature", "🌡️"),              # temps
+            ("Leaf Wetness", "🌿"),              # leaf wetness
+        ]
+        for key, emoji in rules:
+            if key in label:
+                return f"{emoji} {label}"
+        return label
+
+    # ---- Add emoji icons to summary row labels (index) ----
+    summary.index = [label_with_icon(str(i)) for i in summary.index]
+
     # --- Display formatting: per-row decimals + PPFD Min/Average as "-" ---
-    ppfd_label = "Light Intensity (PPFD - µmol m⁻² s⁻¹)"
+    ppfd_label_base = "Light Intensity (PPFD - µmol m⁻² s⁻¹)"
+    ppfd_label = label_with_icon(ppfd_label_base)
 
     def row_format_spec(row_label: str) -> str:
         if "Events per Day" in row_label:
+            return "{:.0f}"
+        if "Water Applied" in row_label:
             return "{:.0f}"
         if "Relative Humidity" in row_label:
             return "{:.0f}"
@@ -1373,9 +1400,7 @@ if numeric_cols:
         if "Temperature" in row_label:
             return "{:.0f}"
         if "Leaf Wetness" in row_label:
-            return "{:.0f}"
-        if "Water Applied" in row_label:
-            return "{:.0f}"
+            return "{:.2f}"
         return "{:.1f}"
 
     def fmt_cell(val, fmt: str) -> str:
@@ -1792,14 +1817,42 @@ if use_time_axis and events_by_zone is not None and not events_by_zone.empty:
     plot_separator()
     figs_for_pdf.append(fig_ir)
 
-    # --- Plot 2+: ON/OFF (Binary) per zone for a representative full day ---
-    day_to_plot = irrig_stats.get("day_to_plot", None)
-    binary_by_zone = irrig_stats.get("binary_by_zone", None)
+    # --- Plot 2+: ON/OFF (Binary) per zone for a selected full day (auto-updates) ---
+    IRR_DAY_KEY = "dash_irrigation_day_to_graph"
 
-    if day_to_plot is not None and binary_by_zone:
+    full_days_ir = irrig_stats.get("full_days", []) or []
+    irr_day_options = [pd.to_datetime(d).strftime("%Y-%m-%d") for d in full_days_ir] if full_days_ir else []
+
+    if irr_day_options:
+        # init default (latest full day) if missing/invalid (important when switching files)
+        if (IRR_DAY_KEY not in st.session_state) or (st.session_state[IRR_DAY_KEY] not in irr_day_options):
+            st.session_state[IRR_DAY_KEY] = irr_day_options[-1]
+
+        st.selectbox(
+            "Day to Graph (Irrigation 24hr)",
+            options=irr_day_options,
+            key=IRR_DAY_KEY,
+            help="Select a full day to display the 24hr irrigation ON/OFF graphs.",
+        )
+
+        day_to_plot = pd.to_datetime(st.session_state[IRR_DAY_KEY])
+    else:
+        st.info("No full days detected for irrigation 24hr plots.")
+        day_to_plot = None
+
+    if day_to_plot is not None:
+        # Build binary series per zone for the selected day
+        day_mask = df_display["Time"].dt.normalize() == day_to_plot.normalize()
+
         for col in cols:
-            day_df = binary_by_zone.get(col)
-            if day_df is None or day_df.empty:
+            sig = pd.to_numeric(df_display.loc[day_mask, col], errors="coerce").fillna(0.0)
+            on = (sig >= float(irrigation_trigger)).astype(int)
+
+            day_df = pd.DataFrame(
+                {"Time": df_display.loc[day_mask, "Time"].values, "IrrigationOn": on.values}
+            )
+
+            if day_df.empty:
                 continue
 
             fig_day, ax_day = plt.subplots(figsize=(8, 3))
@@ -1861,6 +1914,26 @@ if use_time_axis and "LeafWetness" in df_display.columns and day_to_plot_lw is n
     df_lw_day = df_display[df_display["Time"].dt.normalize() == day_to_plot_lw.normalize()].copy()
 
     if not df_lw_day.empty:
+        # --- Day to Graph (auto-updates plot; NOT saved) ---
+        if lw_day_options:
+            if (lw_day_key not in st.session_state) or (st.session_state[lw_day_key] not in lw_day_options):
+                st.session_state[lw_day_key] = lw_day_options[-1]
+
+            st.selectbox(
+                "Day to Graph",
+                options=lw_day_options,
+                key=lw_day_key,
+                help="Select a full day of data to display in the Leaf Wetness (24hr) graph. Not saved to the database.",
+            )
+        else:
+            st.selectbox(
+                "Day to Graph",
+                options=[],
+                disabled=True,
+                key=lw_day_key,
+                help="No full days detected in this dataset.",
+            )
+
         fig_lw, ax_lw = plt.subplots(figsize=(8, 3))
 
         ax_lw.plot(df_lw_day["Time"], df_lw_day["LeafWetness"], label="Leaf Wetness")
@@ -1889,25 +1962,6 @@ if use_time_axis and "LeafWetness" in df_display.columns and day_to_plot_lw is n
         # Inline Leaf Wetness irrigation detection settings
         # (Same intent as Settings page; saved per-user to DB and reruns)
         # ------------------------------------------------------------
-        # --- Day to Graph (auto-updates plot; NOT saved) ---
-        if lw_day_options:
-            if (lw_day_key not in st.session_state) or (st.session_state[lw_day_key] not in lw_day_options):
-                st.session_state[lw_day_key] = lw_day_options[-1]
-
-            st.selectbox(
-                "Day to Graph",
-                options=lw_day_options,
-                key=lw_day_key,
-                help="Select a full day of data to display in the Leaf Wetness (24hr) graph. Not saved to the database.",
-            )
-        else:
-            st.selectbox(
-                "Day to Graph",
-                options=[],
-                disabled=True,
-                key=lw_day_key,
-                help="No full days detected in this dataset.",
-            )
 
         save_lw_settings = False
 
