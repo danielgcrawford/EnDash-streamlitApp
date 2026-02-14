@@ -409,13 +409,13 @@ def legend_below(ax, fig, ncol=3, y=-0.50):
     # Make room at the bottom for the legend
     fig.subplots_adjust(bottom=0.28)
     
-
+#No longer used
 def plot_separator():
     """
     Add a visual break (space + line) between plots on the Streamlit page.
     """
     #st.markdown("<div style='margin: 1.25rem 0;'></div>", unsafe_allow_html=True)
-    st.divider()
+    #st.divider()
     #st.markdown("<div style='margin: 1.25rem 0;'></div>", unsafe_allow_html=True)
 
 #Naming
@@ -691,6 +691,36 @@ st.markdown(
 def badge_html(text: str, cls: str) -> str:
     return f"<div class='metric-badge {cls}'>{text}</div>"
 
+#Styling for summary statistics table
+st.markdown("""
+    <style>
+    /* Target pandas styler tables */
+    table { 
+    width: 100% !important;
+    table-layout: fixed !important;   /* <-- key: obey widths */
+    }
+
+    /* First column (row labels) narrower */
+    table th.row_heading, table td.row_heading,
+    table th:first-child, table td:first-child {
+    width: 40% !important;
+    white-space: normal;             /* allow wrap */
+    }
+
+    /* Make numeric columns equal */
+    table th.col_heading, table td {
+    text-align: center;
+    }
+
+    /* If your table is exactly 4 columns (Label + Min + Avg + Max) */
+    table th:nth-child(2), table td:nth-child(2),
+    table th:nth-child(3), table td:nth-child(3),
+    table th:nth-child(4), table td:nth-child(4) {
+    width: 20% !important;
+    }
+    </style>
+    """, unsafe_allow_html=True)
+
 
 # ---------- Main content ----------
 
@@ -737,227 +767,233 @@ with col3:
     download_slot = st.empty()
 
 # ----- Quick Upload panel (always visible) -----
-st.markdown("### New File Upload")
-st.caption(
-    "Drop a data file here to add it to your dashboard. "
-    "To edit column selections and preview data, use the Data File Settings page. "
-    "To edit units and target setpoints, use the Climate Units and Setpoints page."
-)
-
-#Functions added to accept variable row of column headings and separate Date/Time
-def detect_delimiter_from_lines(lines: list[str]) -> str:
-    """
-    Pick a delimiter by counting occurrences across the first few non-empty lines.
-    Works well for comma, tab, semicolon, pipe.
-    """
-    candidates = [",", "\t", ";", "|"]
-    best = ","
-    best_score = -1
-    for d in candidates:
-        score = sum(line.count(d) for line in lines if line.strip())
-        if score > best_score:
-            best_score = score
-            best = d
-    return best
+left_col, right_col = st.columns(2, gap="medium")
 
 
-def preview_csv_to_dataframe(file_bytes: bytes, encoding: str, n_lines: int = 25) -> tuple[pd.DataFrame, str]:
-    """
-    Read first n_lines using csv.reader (tolerant of ragged rows), return a DataFrame + detected delimiter.
-    """
-    text = file_bytes.decode(encoding, errors="replace")
-    lines = text.splitlines()[:n_lines]
+with left_col:
+    #st.markdown("### New File Upload")
+    st.subheader("New File Upload", help="Upload a file to add it to your dashboard. To edit column selections, use the Data File Settings page. To edit units and target setpoints, use the Climate Units and Setpoints page.")
+    #st.caption()
 
-    # If file is mostly empty, return empty df
-    if not any(l.strip() for l in lines):
-        return pd.DataFrame(), ","
+    #Functions added to accept variable row of column headings and separate Date/Time
+    def detect_delimiter_from_lines(lines: list[str]) -> str:
+        """
+        Pick a delimiter by counting occurrences across the first few non-empty lines.
+        Works well for comma, tab, semicolon, pipe.
+        """
+        candidates = [",", "\t", ";", "|"]
+        best = ","
+        best_score = -1
+        for d in candidates:
+            score = sum(line.count(d) for line in lines if line.strip())
+            if score > best_score:
+                best_score = score
+                best = d
+        return best
 
-    delim = detect_delimiter_from_lines(lines)
 
-    reader = csv.reader(StringIO("\n".join(lines)), delimiter=delim)
-    rows = [r for r in reader]
+    def preview_csv_to_dataframe(file_bytes: bytes, encoding: str, n_lines: int = 25) -> tuple[pd.DataFrame, str]:
+        """
+        Read first n_lines using csv.reader (tolerant of ragged rows), return a DataFrame + detected delimiter.
+        """
+        text = file_bytes.decode(encoding, errors="replace")
+        lines = text.splitlines()[:n_lines]
 
-    # Normalize to rectangular table (pad shorter rows)
-    max_cols = max((len(r) for r in rows), default=0)
-    rows = [r + [None] * (max_cols - len(r)) for r in rows]
+        # If file is mostly empty, return empty df
+        if not any(l.strip() for l in lines):
+            return pd.DataFrame(), ","
 
-    df_preview = pd.DataFrame(rows)
-    return df_preview, delim
+        delim = detect_delimiter_from_lines(lines)
 
-quick_file = st.file_uploader(
-    "File upload (.csv, .xlsx, .xls, .xlsm)",
-    type=["csv", "xlsx", "xls", "xlsm"],
-    key="quick_upload_file",
-)
+        reader = csv.reader(StringIO("\n".join(lines)), delimiter=delim)
+        rows = [r for r in reader]
 
-# Track the last file we successfully processed so we don't re-process it
-if "last_quick_upload_file_id" not in st.session_state:
-    st.session_state.last_quick_upload_file_id = None
+        # Normalize to rectangular table (pad shorter rows)
+        max_cols = max((len(r) for r in rows), default=0)
+        rows = [r + [None] * (max_cols - len(r)) for r in rows]
 
-upload_succeeded = False
+        df_preview = pd.DataFrame(rows)
+        return df_preview, delim
 
-if quick_file is not None:
-    file_id = (quick_file.name, quick_file.size)
+    quick_file = st.file_uploader(
+        "File upload (.csv, .xlsx, .xls, .xlsm)",
+        type=["csv", "xlsx", "xls", "xlsm"],
+        key="quick_upload_file",
+        #help="Drop a data file here to add it to your dashboard.",
+    )
 
-    if st.session_state.last_quick_upload_file_id != file_id:
-        original_name = quick_file.name
-        ext = Path(original_name).suffix or ".csv"
-        file_bytes_raw = quick_file.getvalue()
+    # Track the last file we successfully processed so we don't re-process it
+    if "last_quick_upload_file_id" not in st.session_state:
+        st.session_state.last_quick_upload_file_id = None
 
-        try:
-            # 1) Load raw table
-            df_raw, file_type, encoding_used, header_row = load_table_from_bytes(file_bytes_raw, ext)
-            if header_row > 0:
-                st.info(f"Detected headers on row {header_row+1} (skipped {header_row} row(s) above).")
+    upload_succeeded = False
 
-            # 2) Column mapping (use your saved Upload-page selections when possible)
-            alias_table = build_alias_table()
-            raw_cols = [str(c) for c in df_raw.columns]
-            auto_mapping, _, _ = map_columns(raw_cols, alias_table)
+    if quick_file is not None:
+        file_id = (quick_file.name, quick_file.size)
 
-            if not auto_mapping:
-                raise ValueError("Could not automatically match any columns to Time/AirTemp/RH/PAR.")
+        if st.session_state.last_quick_upload_file_id != file_id:
+            original_name = quick_file.name
+            ext = Path(original_name).suffix or ".csv"
+            file_bytes_raw = quick_file.getvalue()
 
-            # Try to apply the user's LAST SAVED mapping template from the Upload page.
-            prefs = db.get_last_upload_context(user["id"])
-            template = prefs.get("canon_to_raw") or {}
-
-            preferred_mapping = {}
-            used = set()
-
-            # First: apply template (canon -> raw) when the raw column exists in this file
-            for canon, raw in template.items():
-                if not raw:
-                    continue
-                if raw in raw_cols and raw not in used:
-                    preferred_mapping[raw] = canon
-                    used.add(raw)
-
-            # Second: fill any missing canonicals using the automatic mapping
-            if preferred_mapping:
-                mapped_canons = set(preferred_mapping.values())
-                for raw, canon in auto_mapping.items():
-                    if canon in mapped_canons:
-                        continue
-                    if raw in used:
-                        continue
-                    preferred_mapping[raw] = canon
-                    used.add(raw)
-
-            mapping_to_use = preferred_mapping if preferred_mapping else auto_mapping
-
-            # 3) Build cleaned dataframe
-            df_clean = build_clean_dataframe(df_raw, mapping_to_use)
-
-            # Build stored filename: "<OriginalFilename>_<Username>.csv"
-            uname = username_slug(user)
-
-            orig_stem = Path(original_name).stem
-            orig_stem = re.sub(r"\s+", "_", orig_stem)
-            orig_stem = re.sub(r"[^A-Za-z0-9_-]+", "", orig_stem)
-            orig_stem = re.sub(r"_+", "_", orig_stem).strip("_") or "file"
-
-            stored_filename = f"{orig_stem}_{uname}.csv"
-
-            cleaned_bytes = df_clean.to_csv(index=False).encode("utf-8")
-            file_db_id = db.add_file_record(user["id"], stored_filename, cleaned_bytes)
-
-            # Save mapping metadata so it can be reviewed/edited on the Upload page later
             try:
-                canon_to_raw = {canon: None for canon in CANON_OUTPUT_ORDER}
-                for raw, canon in mapping_to_use.items():
-                    canon_to_raw[canon] = raw
+                # 1) Load raw table
+                df_raw, file_type, encoding_used, header_row = load_table_from_bytes(file_bytes_raw, ext)
+                if header_row > 0:
+                    st.info(f"Detected headers on row {header_row+1} (skipped {header_row} row(s) above).")
 
-                db.upsert_file_column_map(
-                    user["id"],
-                    file_db_id,
-                    raw_columns=raw_cols,
-                    canon_to_raw=canon_to_raw,
-                    raw_preview_rows=df_raw.head(10).to_dict(orient="records"),
+                # 2) Column mapping (use your saved Upload-page selections when possible)
+                alias_table = build_alias_table()
+                raw_cols = [str(c) for c in df_raw.columns]
+                auto_mapping, _, _ = map_columns(raw_cols, alias_table)
+
+                if not auto_mapping:
+                    raise ValueError("Could not automatically match any columns to Time/AirTemp/RH/PAR.")
+
+                # Try to apply the user's LAST SAVED mapping template from the Upload page.
+                prefs = db.get_last_upload_context(user["id"])
+                template = prefs.get("canon_to_raw") or {}
+
+                preferred_mapping = {}
+                used = set()
+
+                # First: apply template (canon -> raw) when the raw column exists in this file
+                for canon, raw in template.items():
+                    if not raw:
+                        continue
+                    if raw in raw_cols and raw not in used:
+                        preferred_mapping[raw] = canon
+                        used.add(raw)
+
+                # Second: fill any missing canonicals using the automatic mapping
+                if preferred_mapping:
+                    mapped_canons = set(preferred_mapping.values())
+                    for raw, canon in auto_mapping.items():
+                        if canon in mapped_canons:
+                            continue
+                        if raw in used:
+                            continue
+                        preferred_mapping[raw] = canon
+                        used.add(raw)
+
+                mapping_to_use = preferred_mapping if preferred_mapping else auto_mapping
+
+                # 3) Build cleaned dataframe
+                df_clean = build_clean_dataframe(df_raw, mapping_to_use)
+
+                # Build stored filename: "<OriginalFilename>_<Username>.csv"
+                uname = username_slug(user)
+
+                orig_stem = Path(original_name).stem
+                orig_stem = re.sub(r"\s+", "_", orig_stem)
+                orig_stem = re.sub(r"[^A-Za-z0-9_-]+", "", orig_stem)
+                orig_stem = re.sub(r"_+", "_", orig_stem).strip("_") or "file"
+
+                stored_filename = f"{orig_stem}_{uname}.csv"
+
+                cleaned_bytes = df_clean.to_csv(index=False).encode("utf-8")
+                file_db_id = db.add_file_record(user["id"], stored_filename, cleaned_bytes)
+
+                # Save mapping metadata so it can be reviewed/edited on the Upload page later
+                try:
+                    canon_to_raw = {canon: None for canon in CANON_OUTPUT_ORDER}
+                    for raw, canon in mapping_to_use.items():
+                        canon_to_raw[canon] = raw
+
+                    db.upsert_file_column_map(
+                        user["id"],
+                        file_db_id,
+                        raw_columns=raw_cols,
+                        canon_to_raw=canon_to_raw,
+                        raw_preview_rows=df_raw.head(10).to_dict(orient="records"),
+                    )
+                except Exception:
+                    pass
+
+                # 3) Build cleaned dataframe
+                df_clean = build_clean_dataframe(df_raw, auto_mapping)
+
+                required_for_dashboard = ["Time", "AirTemp", "RH"]
+                missing_for_dashboard = [c for c in required_for_dashboard if c not in df_clean.columns]
+                if missing_for_dashboard:
+                    raise ValueError("Missing required columns for dashboard: " + ", ".join(missing_for_dashboard))
+
+                # 4) Create stored filename based on data start time
+                if "Time" in df_clean.columns and not df_clean["Time"].isna().all():
+                    data_start = df_clean["Time"].min()
+                    data_start_str = data_start.strftime("%Y%m%dT%H%M")
+                else:
+                    data_start_str = time.strftime("%Y%m%dT%H%M", time.gmtime())
+
+                uname = username_slug(user)
+                stored_filename = f"{uname}_{data_start_str}.csv"
+
+                cleaned_bytes = df_clean.to_csv(index=False).encode("utf-8")
+                db.add_file_record(user["id"], stored_filename, cleaned_bytes)
+
+                st.success(
+                    f"Quick upload succeeded and cleaned file `{stored_filename}` was saved."
                 )
-            except Exception:
-                pass
 
-            # 3) Build cleaned dataframe
-            df_clean = build_clean_dataframe(df_raw, auto_mapping)
+                st.session_state.last_quick_upload_file_id = file_id
+                upload_succeeded = True
 
-            required_for_dashboard = ["Time", "AirTemp", "RH"]
-            missing_for_dashboard = [c for c in required_for_dashboard if c not in df_clean.columns]
-            if missing_for_dashboard:
-                raise ValueError("Missing required columns for dashboard: " + ", ".join(missing_for_dashboard))
+            except Exception as e:
+                st.error(f"Quick upload could not automatically process this file: {e}")
+                st.warning("Use the full Upload page to manually select columns and review the mapping for this dataset.")
+                st.page_link("pages/1_Upload.py", label="⚠️ Unable to Upload File – Open Upload Page")
 
-            # 4) Create stored filename based on data start time
-            if "Time" in df_clean.columns and not df_clean["Time"].isna().all():
-                data_start = df_clean["Time"].min()
-                data_start_str = data_start.strftime("%Y%m%dT%H%M")
-            else:
-                data_start_str = time.strftime("%Y%m%dT%H%M", time.gmtime())
+    if upload_succeeded:
+        st.rerun()
 
-            uname = username_slug(user)
-            stored_filename = f"{uname}_{data_start_str}.csv"
+with right_col:
+    # ----- File selection (Next to Quick Upload) -----
+    st.subheader("Current File Selection", help="Choose which previously uploaded file the dashboard should display. To edit column selections, use the Data File Settings page. To edit units and target setpoints, use the Climate Units and Setpoints page.")
 
-            cleaned_bytes = df_clean.to_csv(index=False).encode("utf-8")
-            db.add_file_record(user["id"], stored_filename, cleaned_bytes)
+    files = db.list_user_files(user["id"])
+    if not files:
+        st.info("No cleaned files found yet. Upload a file above to get started.")
+        st.stop()
 
-            st.success(
-                f"Quick upload succeeded and cleaned file `{stored_filename}` was saved."
-            )
+    # Build stable option list using file IDs (NOT label strings)
+    id_to_rec = {int(rec["id"]): rec for rec in files}
+    file_ids = list(id_to_rec.keys())  # list is already most-recent first from DB
 
-            st.session_state.last_quick_upload_file_id = file_id
-            upload_succeeded = True
+    def _home_file_label(fid: int) -> str:
+        r = id_to_rec[int(fid)]
+        return f"{r['filename']} ({r['uploaded_at']})"
 
-        except Exception as e:
-            st.error(f"Quick upload could not automatically process this file: {e}")
-            st.warning("Use the full Upload page to manually select columns and review the mapping for this dataset.")
-            st.page_link("pages/1_Upload.py", label="⚠️ Unable to Upload File – Open Upload Page")
+    # DB-backed default (same pattern as Upload page)
+    last_home_id = db.get_last_home_file_id(user["id"])
+    default_id = last_home_id if (last_home_id in id_to_rec) else file_ids[0]
 
-if upload_succeeded:
-    st.rerun()
+    # Initialize session state ONCE (do not overwrite on every rerun)
+    if "home_selected_file_id" not in st.session_state:
+        st.session_state.home_selected_file_id = default_id
 
-# ----- File selection (DIRECTLY BELOW Quick Upload) -----
-st.markdown("### Current File Selection")
+    # If the selected ID no longer exists (deleted), fall back safely
+    if int(st.session_state.home_selected_file_id) not in id_to_rec:
+        st.session_state.home_selected_file_id = default_id
 
-files = db.list_user_files(user["id"])
-if not files:
-    st.info("No cleaned files found yet. Upload a file above to get started.")
-    st.stop()
+    selected_file_id = st.selectbox(
+        "Select a data file to view",
+        file_ids,
+        format_func=_home_file_label,
+        key="home_selected_file_id",
+    )
 
-# Build stable option list using file IDs (NOT label strings)
-id_to_rec = {int(rec["id"]): rec for rec in files}
-file_ids = list(id_to_rec.keys())  # list is already most-recent first from DB
+    # Persist selection like Upload page does (DB + session)
+    if st.session_state.get("home_selected_file_id_last_saved") != int(selected_file_id):
+        db.set_last_home_file_id(user["id"], int(selected_file_id))
+        st.session_state.home_selected_file_id_last_saved = int(selected_file_id)
 
-def _home_file_label(fid: int) -> str:
-    r = id_to_rec[int(fid)]
-    return f"{r['filename']} ({r['uploaded_at']})"
-
-# DB-backed default (same pattern as Upload page)
-last_home_id = db.get_last_home_file_id(user["id"])
-default_id = last_home_id if (last_home_id in id_to_rec) else file_ids[0]
-
-# Initialize session state ONCE (do not overwrite on every rerun)
-if "home_selected_file_id" not in st.session_state:
-    st.session_state.home_selected_file_id = default_id
-
-# If the selected ID no longer exists (deleted), fall back safely
-if int(st.session_state.home_selected_file_id) not in id_to_rec:
-    st.session_state.home_selected_file_id = default_id
-
-selected_file_id = st.selectbox(
-    "Select a data file to view",
-    file_ids,
-    format_func=_home_file_label,
-    key="home_selected_file_id",
-)
-
-# Persist selection like Upload page does (DB + session)
-if st.session_state.get("home_selected_file_id_last_saved") != int(selected_file_id):
-    db.set_last_home_file_id(user["id"], int(selected_file_id))
-    st.session_state.home_selected_file_id_last_saved = int(selected_file_id)
-
-rec = id_to_rec[int(selected_file_id)]
-st.session_state["selected_file_id"] = int(selected_file_id) 
+    rec = id_to_rec[int(selected_file_id)]
+    st.session_state["selected_file_id"] = int(selected_file_id) 
 
 st.markdown("---")
+
+if rec is None:
+    st.stop()
 
 # ----- Load selected file -----
 file_obj = db.get_file_bytes(rec["id"])
@@ -1066,8 +1102,8 @@ if orig_light_unit == "PPFD" and "Time" in df_display.columns and "PAR" in df_di
 # =========================
 # Dashboard Summary section
 # =========================
-st.subheader("Dashboard Summary")
-st.caption(f"Showing selected file: `{rec['filename']}` (uploaded {rec['uploaded_at']}).")
+st.subheader("Dashboard Summary", help="Upload a new file or select one from above to view your dashboard. To edit column selections, use the Data File Settings page. To edit units and target setpoints, use the Climate Units and Setpoints page.")
+#st.caption(f"Showing selected file: `{rec['filename']}` (uploaded {rec['uploaded_at']}).")
 
 # Summary sentence
 start_time = None
@@ -1082,9 +1118,9 @@ if "Time" in df_display.columns and df_display["Time"].notna().any():
 
     interval_str = format_timedelta(interval_td) if interval_td is not None else "unknown"
     st.caption(
-        f"Data collection from **{start_time.strftime('%Y-%m-%d %H:%M:%S')}** "
+        f"**{start_time.strftime('%Y-%m-%d %H:%M:%S')}** "
         f"to **{end_time.strftime('%Y-%m-%d %H:%M:%S')}**, "
-        f"with an approximate sampling interval of **{interval_str}**."
+        f"approximate sampling interval of **{interval_str}**."
     )
 else:
     st.caption("Time information is not available in this file.")
@@ -1092,7 +1128,7 @@ else:
 # -----------------------------
 # Summary metrics (3 columns)
 # -----------------------------
-metric_cols = st.columns(3, gap="large")
+metric_cols = st.columns(3, gap="medium")
 
 # --- Air Temperature ---
 temp_badge = badge_html("n/a", "badge-na")
@@ -1490,8 +1526,24 @@ if numeric_cols:
         return style
 
     style_df = build_style_df(summary_display, summary_numeric)
-    styler = summary_display.style.apply(lambda _: style_df, axis=None)
-    st.dataframe(styler, width="stretch")
+    styler = (
+        summary_display.style
+        .apply(lambda _: style_df, axis=None)
+        # Center the numeric cells + make them bigger
+        .set_properties(subset=pd.IndexSlice[:, ["Min", "Average", "Max"]],
+                        **{"text-align": "center", "font-size": "18px"})
+        # Make the Min/Average/Max headers bigger + centered
+        .set_table_styles([
+            {"selector": "th.col_heading",
+            "props": [("text-align", "center"), ("font-size", "18px"), ("font-weight", "700")]},
+            # Keep row labels readable 
+            {"selector": "th.row_heading",
+            "props": [("text-align", "left"), ("font-size", "16px"), ("font-weight", "600")]},
+        ])
+    )
+
+    st.markdown(styler.to_html(), unsafe_allow_html=True)
+
 else:
     st.info("No numeric columns found to summarize.")
 
