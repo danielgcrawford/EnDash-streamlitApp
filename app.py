@@ -1742,8 +1742,74 @@ numeric_cols_no_par = [c for c in numeric_cols_no_par if c not in LEAF_WETNESS_E
 
 # ---------- Generic plots for remaining numeric columns ----------
 for col in numeric_cols_no_par:
-    fig, ax = plt.subplots(figsize=(8, 3))
+    fig, ax = plt.subplots(figsize=(8, 3), dpi=200)
     y = df_display[col]
+
+    # Temperature target bands
+    if col in ["AirTemp", "LeafTemp"]:
+        ax.axhline(
+            target_temp_high,
+            color="red",
+            linestyle="--",
+            linewidth=1.0,
+            label=f"Target high temperature ({target_temp_high:.0f})",
+            zorder=1,
+            antialiased=False,
+        )
+        ax.axhline(
+            target_temp_low,
+            color="blue",
+            linestyle="--",
+            linewidth=1.0,
+            label=f"Target low temperature ({target_temp_low:.0f})",
+            zorder=1,
+            antialiased=False,
+        )
+
+
+    # Relative humidity target band
+    if col == "RH":
+        ax.axhline(
+            target_rh_high,
+            color="red",
+            linestyle="--",
+            linewidth=1.0,
+            label=f"Target high Relative Humidity ({target_rh_high:.0f}%)",
+            zorder=1,
+            antialiased=False,
+        )
+        ax.axhline(
+            target_rh_low,
+            color="blue",
+            linestyle="--",
+            linewidth=1.0,
+            label=f"Target low Relative Humidity ({target_rh_low:.0f}%)",
+            zorder=1,
+            antialiased=False,
+        )
+        
+
+    # VPD target band
+    if col in ["VPDair", "VPDleaf"]:
+        ax.axhline(
+            target_vpd_high,
+            color="red",
+            linestyle="--",
+            linewidth=1.0,
+            label=f"Target high VPD ({target_vpd_high:.2f} kPa)",
+            zorder=1,
+            antialiased=False,
+        )
+        ax.axhline(
+            target_vpd_low,
+            color="blue",
+            linestyle="--",
+            linewidth=1.0,
+            label=f"Target low VPD ({target_vpd_low:.2f} kPa)",
+            zorder=1,
+            antialiased=False,
+        )
+
 
     # Color the line based on target bands (black within, red above, blue below)
     has_band = col in ["AirTemp", "LeafTemp", "RH", "VPDair", "VPDleaf"]
@@ -1756,15 +1822,18 @@ for col in numeric_cols_no_par:
         else:  # VPDair / VPDleaf
             low, high = float(target_vpd_low), float(target_vpd_high)
 
+        #temporary fix for missing values around target lines
+        ax.plot(x_values,y,color="black", linewidth=1.2,label=pretty_label(col, temp_unit),zorder=3)
+
         below = y < low
         above = y > high
         within = ~(below | above)
 
-        ax.plot(x_values, y.where(within), color="black", linewidth=1.2, label=pretty_label(col, temp_unit))
-        ax.plot(x_values, y.where(above), color="red", linewidth=1.2)
-        ax.plot(x_values, y.where(below), color="blue", linewidth=1.2)
+        #ax.plot(x_values, y.where(within), color="black", linewidth=1.2, label=pretty_label(col, temp_unit), zorder=3, solid_capstyle="butt", solid_joinstyle="miter")
+        ax.plot(x_values, y.where(above), color="red", linewidth=1.2, zorder=4, solid_capstyle="butt", solid_joinstyle="miter")
+        ax.plot(x_values, y.where(below), color="blue", linewidth=1.2, zorder=4, solid_capstyle="butt", solid_joinstyle="miter")
     else:
-        ax.plot(x_values, y, label=pretty_label(col, temp_unit))
+        ax.plot(x_values, y, label=pretty_label(col, temp_unit), zorder=3, solid_capstyle="butt", solid_joinstyle="miter")
 
     if use_time_axis:
         ax.set_xlabel("Time")
@@ -1776,60 +1845,6 @@ for col in numeric_cols_no_par:
     y_label = pretty_label(col, temp_unit)
     ax.set_ylabel(y_label)
     ax.set_title(y_label)
-
-    # Temperature target bands
-    if col in ["AirTemp", "LeafTemp"]:
-        ax.axhline(
-            target_temp_high,
-            color="red",
-            linestyle="--",
-            linewidth=1.0,
-            label=f"Target high temperature ({target_temp_high:.0f})",
-        )
-        ax.axhline(
-            target_temp_low,
-            color="blue",
-            linestyle="--",
-            linewidth=1.0,
-            label=f"Target low temperature ({target_temp_low:.0f})",
-        )
-
-
-    # Relative humidity target band
-    if col == "RH":
-        ax.axhline(
-            target_rh_high,
-            color="red",
-            linestyle="--",
-            linewidth=1.0,
-            label=f"Target high Relative Humidity ({target_rh_high:.0f}%)",
-        )
-        ax.axhline(
-            target_rh_low,
-            color="blue",
-            linestyle="--",
-            linewidth=1.0,
-            label=f"Target low Relative Humidity ({target_rh_low:.0f}%)",
-        )
-        
-
-    # VPD target band
-    if col in ["VPDair", "VPDleaf"]:
-        ax.axhline(
-            target_vpd_high,
-            color="red",
-            linestyle="--",
-            linewidth=1.0,
-            label=f"Target high VPD ({target_vpd_high:.2f} kPa)",
-        )
-        ax.axhline(
-            target_vpd_low,
-            color="blue",
-            linestyle="--",
-            linewidth=1.0,
-            label=f"Target low VPD ({target_vpd_low:.2f} kPa)",
-        )
-        
 
     legend_below(ax, fig, ncol=3, y=-0.5) #Set number of columns in time series graph legend
     #ax.grid(True, linestyle=":", linewidth=0.5)
