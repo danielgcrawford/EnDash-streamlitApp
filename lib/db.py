@@ -68,7 +68,8 @@ def init_db() -> None:
             target_rh_low    REAL DEFAULT 70.0,
             target_rh_high   REAL DEFAULT 95.0,
             target_ppfd      REAL DEFAULT 150.0,
-            target_dli       REAL DEFAULT 8.0,
+            target_dli_low   REAL DEFAULT 8.0,
+            target_dli_high  REAL DEFAULT 12.0,
             target_vpd_low   REAL DEFAULT 0.2,
             target_vpd_high  REAL DEFAULT 0.8,
             irrigation_trigger          REAL DEFAULT 1.0,
@@ -106,8 +107,10 @@ def init_db() -> None:
         cur.execute("ALTER TABLE settings ADD COLUMN target_rh_high REAL DEFAULT 95.0;")
     if "target_ppfd" not in existing_cols:
         cur.execute("ALTER TABLE settings ADD COLUMN target_ppfd REAL DEFAULT 150.0;")
-    if "target_dli" not in existing_cols:
-        cur.execute("ALTER TABLE settings ADD COLUMN target_dli REAL DEFAULT 8.0;")
+    if "target_dli_low" not in existing_cols:
+        cur.execute("ALTER TABLE settings ADD COLUMN target_dli_low REAL DEFAULT 8.0;")
+    if "target_dli_high" not in existing_cols:
+        cur.execute("ALTER TABLE settings ADD COLUMN target_dli_high REAL DEFAULT 12.0;")
     if "target_vpd_low" not in existing_cols:
         cur.execute("ALTER TABLE settings ADD COLUMN target_vpd_low REAL DEFAULT 0.2;")
     if "target_vpd_high" not in existing_cols:
@@ -276,7 +279,8 @@ def update_settings(
     target_rh_low: float,
     target_rh_high: float,
     target_ppfd: float,
-    target_dli: float,
+    target_dli_low: float,
+    target_dli_high: float,
     target_vpd_low: float,
     target_vpd_high: float,
     irrigation_trigger: float,
@@ -300,7 +304,8 @@ def update_settings(
             target_rh_low = %s,
             target_rh_high = %s,
             target_ppfd = %s,
-            target_dli = %s,
+            target_dli_low = %s,
+            target_dli_high = %s,
             target_vpd_low = %s,
             target_vpd_high = %s,
             irrigation_trigger = %s,
@@ -320,7 +325,8 @@ def update_settings(
             target_rh_low,
             target_rh_high,
             target_ppfd,
-            target_dli,
+            target_dli_low,
+            target_dli_high,
             target_vpd_low,
             target_vpd_high,
             irrigation_trigger,

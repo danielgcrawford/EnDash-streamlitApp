@@ -1033,7 +1033,8 @@ target_rh_low = float(settings.get("target_rh_low", 50.0))
 target_rh_high = float(settings.get("target_rh_high", 90.0))
 
 target_ppfd = float(settings.get("target_ppfd", 750.0))
-target_dli = float(settings.get("target_dli", 10.0))
+target_dli_low = float(settings.get("target_dli_low", 8.0))
+target_dli_high = float(settings.get("target_dli_high", 12.0))
 
 target_vpd_low = float(settings.get("target_vpd_low", 0.2))
 target_vpd_high = float(settings.get("target_vpd_high", 1.5))
@@ -1210,19 +1211,23 @@ dli_badge = badge_html("n/a", "badge-na")
 
 if daily_dli_series is not None and not daily_dli_series.empty:
     dli_mean = float(daily_dli_series.mean())
-    pct_days_above = 100.0 * float((daily_dli_series > target_dli).mean())
 
-    if dli_mean > target_dli:
-        state_txt = "Above target"
-        cls = "badge-good"   # green if above
-    elif dli_mean < target_dli:
-        state_txt = "Below target"
-        cls = "badge-high"    # red if below
+    pct_days_below = 100.0 * float((daily_dli_series < target_dli_low).mean())
+    pct_days_within = 100.0 * float(((daily_dli_series >= target_dli_low) & (daily_dli_series <= target_dli_high)).mean())
+    pct_days_above = 100.0 * float((daily_dli_series > target_dli_high).mean())
+
+    # Badge state based on MEAN (simple + intuitive)
+    if dli_mean < target_dli_low:
+        state_txt = "Below band"
+        cls = "badge-high"      # red
+    elif dli_mean > target_dli_high:
+        state_txt = "Above band"
+        cls = "badge-high"      # red (or create a separate warning class if you want)
     else:
-        state_txt = "At target"
-        cls = "badge-good"
+        state_txt = "Within band"
+        cls = "badge-good"      # green
 
-    dli_badge = badge_html(f"{state_txt} · {pct_days_above:.0f}% days above target", cls)
+    dli_badge = badge_html(f"{state_txt} · {pct_days_within:.0f}% days within target", cls)
 
     metric_cols[2].metric(
         label="Average DLI (mol m⁻² d⁻¹)",
@@ -1487,7 +1492,13 @@ if numeric_cols:
                     continue
 
                 if "Daily Light Integral" in str(row_label):
-                    set_color(row_label, col, "blue" if float(val) < float(target_dli) else "black")
+                    v = float(val)
+                    if v < float(target_dli_low):
+                        set_color(row_label, col, "blue")
+                    elif v > float(target_dli_high):
+                        set_color(row_label, col, "red")
+                    else:
+                        set_color(row_label, col, "black")
                     continue
 
                 # Temperature rows
@@ -1576,7 +1587,7 @@ ax_cover.text(0.05, 0.74, "Targets", fontsize=13, fontweight="bold")
 ax_cover.text(0.07, 0.70, f"Temperature band: {target_temp_low:.1f} to {target_temp_high:.1f} ({'°F' if temp_unit=='F' else '°C'})", fontsize=11)
 ax_cover.text(0.07, 0.67, f"Relative humidity band: {target_rh_low:.0f}% to {target_rh_high:.0f}%", fontsize=11)
 ax_cover.text(0.07, 0.64, f"PPFD target: {target_ppfd:.1f} µmol m⁻² s⁻¹", fontsize=11)
-ax_cover.text(0.07, 0.61, f"DLI target: {target_dli:.1f} mol m⁻² d⁻¹", fontsize=11)
+ax_cover.text(0.07, 0.61, f"DLI band: {target_dli_low:.1f} mol m⁻² d⁻¹ to {target_dli_high:.1f} mol m⁻² d⁻¹", fontsize=11)
 ax_cover.text(0.07, 0.58, f"VPD band: {target_vpd_low:.2f} to {target_vpd_high:.2f} kPa", fontsize=11)
 
 if temp_within_pct is not None:
@@ -1656,12 +1667,20 @@ if "PAR" in numeric_cols:
             label="DLI (mol m⁻² d⁻¹)",
         )
         ax2.axhline(
-            target_dli,
+            target_dli_low,
             color="tab:orange",
             linestyle="--",
             linewidth=1.0,
             zorder=1,
-            label=f"Target DLI ({target_dli:.1f})",
+            label=f"Target DLI Low ({target_dli_low:.1f})",
+        )
+        ax2.axhline(
+            target_dli_high,
+            color="tab:orange",
+            linestyle="--",
+            linewidth=1.0,
+            zorder=1,
+            label=f"Target DLI High ({target_dli_high:.1f})",
         )
 
     ax2.set_ylabel("DLI (mol m⁻² d⁻¹)", color="tab:orange")
@@ -1701,9 +1720,11 @@ if "PAR" in numeric_cols:
         if "target ppfd" in s:
             return 20
 
-        # Target DLI line
-        if "target dli" in s:
-            return 40
+        # Target DLI lines
+        if "target dli low" in s:
+            return 35
+        if "target dli high" in s:
+            return 45
 
         # DLI bars (non-target)
         # (Make sure target DLI is caught above first)

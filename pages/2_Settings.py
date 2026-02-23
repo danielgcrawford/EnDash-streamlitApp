@@ -42,7 +42,8 @@ DEFAULT_TARGET_RH_HIGH = 95.0
 
 # LIGHT / DLI TARGETS
 DEFAULT_TARGET_PPFD = 150.0   # µmol m⁻² s⁻¹
-DEFAULT_TARGET_DLI = 8.0      # mol m⁻² d⁻¹
+DEFAULT_TARGET_DLI_LOW = 8.0      # mol m⁻² d⁻¹
+DEFAULT_TARGET_DLI_HIGH = 12.0
 
 # VPD TARGETS (kPa)
 DEFAULT_TARGET_VPD_LOW = 0.2
@@ -75,7 +76,8 @@ target_rh_low = float(settings.get("target_rh_low", DEFAULT_TARGET_RH_LOW))
 target_rh_high = float(settings.get("target_rh_high", DEFAULT_TARGET_RH_HIGH))
 
 target_ppfd = float(settings.get("target_ppfd", DEFAULT_TARGET_PPFD))
-target_dli = float(settings.get("target_dli", DEFAULT_TARGET_DLI))
+target_dli_low = float(settings.get("target_dli_low", DEFAULT_TARGET_DLI_LOW))
+target_dli_high = float(settings.get("target_dli_high", DEFAULT_TARGET_DLI_HIGH))
 
 target_vpd_low = float(settings.get("target_vpd_low", DEFAULT_TARGET_VPD_LOW))
 target_vpd_high = float(settings.get("target_vpd_high", DEFAULT_TARGET_VPD_HIGH))
@@ -248,7 +250,7 @@ with st.form("settings_form"):
     # ------- Light & DLI targets -------
     st.markdown("##### Light & DLI targets")
 
-    col_ppfd, col_dli = st.columns(2)
+    col_ppfd, col_dli_low, col_dli_high = st.columns(3)
     with col_ppfd:
         ppfd_input = st.number_input(
             "Target PPFD (µmol m⁻² s⁻¹)",
@@ -256,16 +258,25 @@ with st.form("settings_form"):
             min_value=0.0,
             step=10.0,
             format="%.1f",
-            help="Target instantaneous PAR intensity.",
+            help="Target PAR light level.",
         )
-    with col_dli:
-        dli_input = st.number_input(
-            "Target Daily Light Integral (mol m⁻² d⁻¹)",
-            value=target_dli,
+    with col_dli_low:
+        dli_low_input = st.number_input(
+            "Target DLI Low (mol m⁻² d⁻¹)",
+            value=target_dli_low,
             min_value=0.0,
             step=0.5,
             format="%.2f",
-            help="Daily light integral target for the crop.",
+            help="Lower bound of your desired Daily Light Integral Band.",
+        )
+    with col_dli_high:
+        dli_high_input = st.number_input(
+            "Target DLI High (mol m⁻² d⁻¹)",
+            value=target_dli_high,
+            min_value=0.0,
+            step=0.5,
+            format="%.2f",
+            help="Upper bound of your desired Daily Light Integral Band.",
         )
 
     # ------- VPD setpoints -------
@@ -380,6 +391,8 @@ if save_btn:
         errors.append("Target **high RH** must be greater than target **low RH**.")
     if vpd_high_input <= vpd_low_input:
         errors.append("Target **high VPD** must be greater than target **low VPD**.")
+    if dli_high_input <= dli_low_input:
+        errors.append("Target **high DLI** must be greater than target **low DLI**.")
 
     if errors:
         for err in errors:
@@ -395,7 +408,8 @@ if save_btn:
             target_rh_low=float(rh_low_input),
             target_rh_high=float(rh_high_input),
             target_ppfd=float(ppfd_input),
-            target_dli=float(dli_input),
+            target_dli_low=float(dli_low_input),
+            target_dli_high=float(dli_high_input),
             target_vpd_low=float(vpd_low_input),
             target_vpd_high=float(vpd_high_input),
             irrigation_trigger=float(irrigation_trigger_input),
