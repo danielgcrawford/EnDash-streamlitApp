@@ -691,7 +691,7 @@ st.markdown(
 def badge_html(text: str, cls: str) -> str:
     return f"<div class='metric-badge {cls}'>{text}</div>"
 
-#Styling for summary statistics table
+#Styling for summary statistics table - edit column width
 st.markdown("""
     <style>
     /* Target pandas styler tables */
@@ -703,7 +703,7 @@ st.markdown("""
     /* First column (row labels) narrower */
     table th.row_heading, table td.row_heading,
     table th:first-child, table td:first-child {
-    width: 40% !important;
+    width: 28% !important;
     white-space: normal;             /* allow wrap */
     }
 
@@ -712,11 +712,12 @@ st.markdown("""
     text-align: center;
     }
 
-    /* If your table is exactly 4 columns (Label + Min + Avg + Max) */
+    /* If your table is exactly 6 columns (Label + Min + Avg + Max) */
     table th:nth-child(2), table td:nth-child(2),
     table th:nth-child(3), table td:nth-child(3),
-    table th:nth-child(4), table td:nth-child(4) {
-    width: 20% !important;
+    table th:nth-child(4), table td:nth-child(4),
+    table th:nth-chile(5), table td:nth-child(5) {
+    width: 14% !important;
     }
     </style>
     """, unsafe_allow_html=True)
@@ -1346,6 +1347,31 @@ if numeric_cols:
     summary.rename(columns={"min": "Min", "mean": "Average", "max": "Max"}, inplace=True)
     summary.index = [pretty_label(c, temp_unit) for c in summary.index]
 
+    # ---- Add Target columns (numeric; NaN means show "-") ----
+    summary["Low Target"] = np.nan
+    summary["High Target"] = np.nan
+
+    def _set_targets(label_contains: str, low, high):
+        mask = summary.index.to_series().astype(str).str.contains(label_contains, regex=False)
+        if low is not None:
+            summary.loc[mask, "Low Target"] = float(low)
+        if high is not None:
+            summary.loc[mask, "High Target"] = float(high)
+
+    # Air + Leaf temperature use same band
+    _set_targets("Air Temperature", target_temp_low, target_temp_high)
+    _set_targets("Leaf Temperature", target_temp_low, target_temp_high)
+
+    # RH band
+    _set_targets("Relative Humidity", target_rh_low, target_rh_high)
+
+    # VPD band
+    _set_targets("Vapor Pressure Deficit", target_vpd_low, target_vpd_high)
+
+    # Light Intensity (PPFD): only a single target -> put it in High Target, Low Target stays "-"
+    _set_targets("Light Intensity", None, target_ppfd)
+
+
     # ---- Add DLI row (if available) ----
     if daily_dli_series is not None and not daily_dli_series.empty:
         dli_row = pd.DataFrame(
@@ -1353,6 +1379,9 @@ if numeric_cols:
             index=["Daily Light Integral (mol m⁻² d⁻¹)"],
         )
         summary = pd.concat([summary, dli_row], axis=0)
+       
+        # DLI band Target column (now that the DLI row exists)
+        _set_targets("Daily Light Integral", target_dli_low, target_dli_high)
 
     # ---- Add irrigation events/day rows (PER ZONE, full days only) ----
     if events_by_zone is not None and not events_by_zone.empty:
@@ -1421,6 +1450,45 @@ if numeric_cols:
     # ---- Add emoji icons to summary row labels (index) ----
     summary.index = [label_with_icon(str(i)) for i in summary.index]
 
+    # Put targets first in the table
+    summary = summary[["Low Target", "High Target", "Min", "Average", "Max"]]
+
+    # ---- Reorder Summary Statistics rows (keep irrigation rows at the bottom, same order) ----
+    orig_idx = list(summary.index)
+    orig_pos = {lab: i for i, lab in enumerate(orig_idx)}
+
+    def _base_label(lab: str) -> str:
+        # label_with_icon makes "Emoji- Some Label" -> strip the emoji prefix
+        s = str(lab)
+        return s.split(" ", 1)[1] if " " in s else s
+
+    def _rank(lab: str) -> int:
+        b = _base_label(lab)
+
+        # desired order:
+        if "Air Temperature" in b:
+            return 0
+        if "Leaf Temperature" in b:
+            return 1
+        if "Relative Humidity" in b:
+            return 2
+        if "Vapor Pressure Deficit" in b:
+            return 3
+        if "Light Intensity" in b:
+            return 4
+        if "Daily Light Integral" in b:
+            return 5
+
+        # Leaf Wetness (but NOT irrigation rows that also contain "Leaf Wetness")
+        if "Leaf Wetness" in b and ("Events per Day" not in b) and ("Water Applied" not in b):
+            return 6
+
+        # everything else (irrigation events/day + water applied/day) stays at the end
+        return 100
+
+    new_idx = sorted(orig_idx, key=lambda lab: (_rank(lab), orig_pos[lab]))
+    summary = summary.loc[new_idx]
+
     # --- Display formatting: per-row decimals + PPFD Min/Average as "-" ---
     ppfd_label_base = "Light Intensity (PPFD - µmol m⁻² s⁻¹)"
     ppfd_label = label_with_icon(ppfd_label_base)
@@ -1481,6 +1549,11 @@ if numeric_cols:
                     val = df_num.loc[row_label, col]
                 except Exception:
                     val = np.nan
+
+                # Don't color the Target columns (keep them neutral)
+                if col in ["Low Target", "High Target"]:
+                    set_color(row_label, col, "black")
+                    continue
 
                 if pd.isna(val):
                     set_color(row_label, col, "black")
