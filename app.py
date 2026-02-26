@@ -712,7 +712,7 @@ st.markdown("""
     text-align: center;
     }
 
-    /* If your table is exactly 6 columns (Label + Min + Avg + Max) */
+    /* If your table is exactly 6 columns (Label + Low & High Targets + Min + Avg + Max) */
     table th:nth-child(2), table td:nth-child(2),
     table th:nth-child(3), table td:nth-child(3),
     table th:nth-child(4), table td:nth-child(4),
@@ -1450,8 +1450,8 @@ if numeric_cols:
     # ---- Add emoji icons to summary row labels (index) ----
     summary.index = [label_with_icon(str(i)) for i in summary.index]
 
-    # Put targets first in the table
-    summary = summary[["Low Target", "High Target", "Min", "Average", "Max"]]
+    # Column order
+    summary = summary[["Min", "Average", "Max", "Low Target", "High Target"]]
 
     # ---- Reorder Summary Statistics rows (keep irrigation rows at the bottom, same order) ----
     orig_idx = list(summary.index)
