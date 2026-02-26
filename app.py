@@ -1486,9 +1486,9 @@ if numeric_cols:
                     set_color(row_label, col, "black")
                     continue
 
-                # PPFD & DLI: blue only if BELOW setpoint, else black
+                # PPFD & DLI
                 if row_label == ppfd_label:
-                    set_color(row_label, col, "blue" if float(val) < float(target_ppfd) else "black")
+                    set_color(row_label, col, "green" if float(val) < float(target_ppfd) else "red")
                     continue
 
                 if "Daily Light Integral" in str(row_label):
@@ -1498,7 +1498,7 @@ if numeric_cols:
                     elif v > float(target_dli_high):
                         set_color(row_label, col, "red")
                     else:
-                        set_color(row_label, col, "black")
+                        set_color(row_label, col, "green")
                     continue
 
                 # Temperature rows
@@ -1508,7 +1508,7 @@ if numeric_cols:
                     elif float(val) > float(target_temp_high):
                         set_color(row_label, col, "red")
                     else:
-                        set_color(row_label, col, "black")
+                        set_color(row_label, col, "green")
                     continue
 
                 # RH row
@@ -1518,7 +1518,7 @@ if numeric_cols:
                     elif float(val) > float(target_rh_high):
                         set_color(row_label, col, "red")
                     else:
-                        set_color(row_label, col, "black")
+                        set_color(row_label, col, "green")
                     continue
 
                 # VPD rows
@@ -1528,7 +1528,7 @@ if numeric_cols:
                     elif float(val) > float(target_vpd_high):
                         set_color(row_label, col, "red")
                     else:
-                        set_color(row_label, col, "black")
+                        set_color(row_label, col, "green")
                     continue
 
                 # Everything else (including irrigation events/day): black
@@ -1586,7 +1586,7 @@ if start_time is not None and end_time is not None:
 ax_cover.text(0.05, 0.74, "Targets", fontsize=13, fontweight="bold")
 ax_cover.text(0.07, 0.70, f"Temperature band: {target_temp_low:.1f} to {target_temp_high:.1f} ({'°F' if temp_unit=='F' else '°C'})", fontsize=11)
 ax_cover.text(0.07, 0.67, f"Relative humidity band: {target_rh_low:.0f}% to {target_rh_high:.0f}%", fontsize=11)
-ax_cover.text(0.07, 0.64, f"PPFD target: {target_ppfd:.1f} µmol m⁻² s⁻¹", fontsize=11)
+ax_cover.text(0.07, 0.64, f"PPFD max: {target_ppfd:.1f} µmol m⁻² s⁻¹", fontsize=11)
 ax_cover.text(0.07, 0.61, f"DLI band: {target_dli_low:.1f} mol m⁻² d⁻¹ to {target_dli_high:.1f} mol m⁻² d⁻¹", fontsize=11)
 ax_cover.text(0.07, 0.58, f"VPD band: {target_vpd_low:.2f} to {target_vpd_high:.2f} kPa", fontsize=11)
 
@@ -1608,18 +1608,56 @@ if summary is not None:
             t_text += f" | Interval: {format_timedelta(interval_td)}"
         title_text = f"{title_text}\n{t_text}"
 
-    ax_summary.set_title(title_text, fontsize=10, pad=20)
+    #ax_summary.set_title(title_text, fontsize=10, pad=20)
+
+    # Strip emojis for PDF to avoid glyph warnings
+    def _strip_non_ascii(s: str) -> str:
+        return s.encode("ascii", errors="ignore").decode("ascii").strip()
+
+    summary_display_pdf = summary_display.copy()
+    summary_display_pdf.index = [_strip_non_ascii(str(x)) for x in summary_display_pdf.index]
+
+    # Build color style table (same logic used for the website table)
+    style_df_pdf = build_style_df(summary_display, summary_numeric)  # keep original index for lookup
 
     tbl = ax_summary.table(
-        cellText=summary_display.values,   # <-- uses the same formatted strings (and "-" for PPFD)
-        rowLabels=summary_display.index,
-        colLabels=summary_display.columns,
+        cellText=summary_display_pdf.values,
+        rowLabels=summary_display_pdf.index,
+        colLabels=summary_display_pdf.columns,
         loc="center",
+        cellLoc="center",   # centers body cells (helps a lot)
+        colLoc="center",    # centers column headers
     )
 
     tbl.auto_set_font_size(False)
-    tbl.set_fontsize(8)
-    tbl.scale(1.0, 1.2)
+    tbl.set_fontsize(9)
+    tbl.scale(1.0, 1.35)
+
+    # Apply per-cell styling: center + colors + bold header
+    # Matplotlib indexing: header row is r=0; row labels are in column c=-1
+    for (r, c), cell in tbl.get_celld().items():
+        cell.get_text().set_ha("center")
+        cell.get_text().set_va("center")
+
+        # Header row
+        if r == 0:
+            cell.get_text().set_weight("bold")
+            cell.get_text().set_fontsize(10)
+
+        # Row label column (the left-most label column)
+        if c == -1:
+            cell.get_text().set_ha("left")
+            cell.get_text().set_weight("bold")
+
+        # Apply red/blue/black coloring to data cells (not headers)
+        if r >= 1 and c >= 0:
+            row_label_original = summary_display.index[r - 1]  # original (with emoji) index
+            col_name = summary_display.columns[c]
+
+            css = style_df_pdf.at[row_label_original, col_name]  # e.g. "color: red;"
+            m = re.search(r"color:\s*([^;]+)", str(css))
+            if m:
+                cell.get_text().set_color(m.group(1).strip())
 
     figs_for_pdf.append(fig_summary)
 
@@ -1648,7 +1686,7 @@ if "PAR" in numeric_cols:
         linestyle="--",
         linewidth=1.0,
         zorder=2,
-        label=f"Target PPFD ({target_ppfd:.0f})",
+        label=f"Target PPFD Max ({target_ppfd:.0f})",
     )
 
     # DLI bars (only if computed)
@@ -1741,7 +1779,7 @@ if "PAR" in numeric_cols:
         handles_sorted, labels_sorted,
         loc="upper center",
         bbox_to_anchor=(0.5, -0.50),
-        ncol=2,          # keeps a compact layout; works for 2 or 4 items
+        ncol=3,          # keeps a compact layout; works for 2 or 4 items
         frameon=True,
         fontsize=9,
     )
