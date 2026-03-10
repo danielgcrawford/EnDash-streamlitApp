@@ -666,6 +666,57 @@ def compute_irrigation_events_per_day(
         "binary_by_zone": binary_by_zone,
     }
 
+#Helpers for updated editable table
+IGNORE_RAW = "(None)"
+
+SUMMARY_CANON_ROWS = [
+    ("AirTemp", "Air Temperature"),
+    ("LeafTemp", "Leaf Temperature"),
+    ("RH", "Relative Humidity"),
+    ("VPD", "VPD"),
+    ("PAR", "Light Intensity"),
+    ("DLI", "DLI"),
+    ("LeafWetness", "Leaf Wetness"),
+    # irrigation rows stay as-is in existing summary logic
+]
+
+def _safe_float(x):
+    try:
+        if x is None:
+            return None
+        if isinstance(x, str) and x.strip() == "":
+            return None
+        v = float(x)
+        # NaN check
+        if v != v:
+            return None
+        return v
+    except Exception:
+        return None
+
+
+def _canon_to_raw_from_fcm(fcm_row, fallback_raw_cols):
+    canon_to_raw = {canon: None for canon in CANON_OUTPUT_ORDER}
+    raw_cols = list(fallback_raw_cols)
+
+    if fcm_row:
+        if fcm_row.get("canon_to_raw"):
+            # stored JSONB already deserialized by RealDictCursor
+            for k, v in (fcm_row.get("canon_to_raw") or {}).items():
+                canon_to_raw[str(k)] = v if v else None
+        if fcm_row.get("raw_columns"):
+            raw_cols = [str(c) for c in (fcm_row.get("raw_columns") or [])] or raw_cols
+
+    return canon_to_raw, raw_cols
+
+
+def _invert_canon_to_raw(canon_to_raw: dict) -> dict:
+    """{canon: raw} -> {raw: canon} dropping Nones"""
+    out = {}
+    for canon, raw in (canon_to_raw or {}).items():
+        if raw:
+            out[str(raw)] = str(canon)
+    return out
 
 # --- Small status badges (pills) used under metrics ---
 st.markdown(
@@ -893,7 +944,13 @@ with left_col:
                 stored_filename = f"{orig_stem}_{uname}.csv"
 
                 cleaned_bytes = df_clean.to_csv(index=False).encode("utf-8")
-                file_db_id = db.add_file_record(user["id"], stored_filename, cleaned_bytes)
+                file_db_id = db.add_file_record(
+                    user["id"],
+                    stored_filename,
+                    cleaned_bytes,
+                    raw_filename=original_name,
+                    raw_bytes=file_bytes_raw,
+                )
 
                 # Save mapping metadata so it can be reviewed/edited on the Upload page later
                 try:
@@ -1020,6 +1077,10 @@ if "Time" in df.columns:
 # ----- Load per-user settings -----
 settings_row = db.get_or_create_settings(user["id"])
 settings = dict(settings_row) if settings_row is not None else {}
+
+# ----- Load saved mapping for THIS file (per user per file) -----
+fcm = db.get_file_column_map(int(rec["id"]))
+canon_to_raw_saved, raw_cols_for_dropdown = _canon_to_raw_from_fcm(fcm, fallback_raw_cols=list(df.columns))
 
 # Units
 temp_unit = settings.get("temp_unit", "F")  # display unit 'F' or 'C'
@@ -1450,44 +1511,57 @@ if numeric_cols:
     # ---- Add emoji icons to summary row labels (index) ----
     summary.index = [label_with_icon(str(i)) for i in summary.index]
 
-    # Column order
-    summary = summary[["Min", "Average", "Max", "Low Target", "High Target"]]
+    # Column order for display table/editor
+    summary = summary[["Low Target", "High Target", "Min", "Average", "Max"]]
 
-    # ---- Reorder Summary Statistics rows (keep irrigation rows at the bottom, same order) ----
-    orig_idx = list(summary.index)
-    orig_pos = {lab: i for i, lab in enumerate(orig_idx)}
+    def _visible_irrigation_canons() -> list[str]:
+        """
+        Mirror the Upload-page behavior as closely as possible:
+        Always show at least Irrigation1.
+        """
+        found = []
+        for i in range(1, MAX_IRRIGATION_ZONES + 1):
+            canon = f"Irrigation{i}"
+            if (
+                canon_to_raw_saved.get(canon)
+                or canon in df.columns
+                or canon in df_display.columns
+            ):
+                found.append(canon)
 
-    def _base_label(lab: str) -> str:
-        # label_with_icon makes "Emoji- Some Label" -> strip the emoji prefix
-        s = str(lab)
-        return s.split(" ", 1)[1] if " " in s else s
+        return found or ["Irrigation1"]
 
-    def _rank(lab: str) -> int:
-        b = _base_label(lab)
+    visible_irrig_canons = _visible_irrigation_canons()
 
-        # desired order:
-        if "Air Temperature" in b:
-            return 0
-        if "Leaf Temperature" in b:
-            return 1
-        if "Relative Humidity" in b:
-            return 2
-        if "Vapor Pressure Deficit" in b:
-            return 3
-        if "Light Intensity" in b:
-            return 4
-        if "Daily Light Integral" in b:
-            return 5
+    # Pick whichever VPD label exists in this file (leaf preferred if present)
+    vpd_candidates = [idx for idx in summary.index if "Vapor Pressure Deficit" in str(idx)]
+    vpd_label = vpd_candidates[0] if vpd_candidates else "🍃 Leaf Vapor Pressure Deficit (kPa)"
 
-        # Leaf Wetness (but NOT irrigation rows that also contain "Leaf Wetness")
-        if "Leaf Wetness" in b and ("Events per Day" not in b) and ("Water Applied" not in b):
-            return 6
+    temp_symbol = "°F" if temp_unit == "F" else "°C"
 
-        # everything else (irrigation events/day + water applied/day) stays at the end
-        return 100
+    desired_rows = [
+        f"🌡️ Air Temperature ({temp_symbol})",
+        f"🍂 Leaf Temperature ({temp_symbol})",
+        "💦 Relative Humidity (%)",
+        vpd_label,
+        "💡 Light Intensity (PPFD - µmol m⁻² s⁻¹)",
+        "🌤️ Daily Light Integral (mol m⁻² d⁻¹)",
+        "🌿 Leaf Wetness",
+    ]
 
-    new_idx = sorted(orig_idx, key=lambda lab: (_rank(lab), orig_pos[lab]))
-    summary = summary.loc[new_idx]
+    # Use irrigation EVENTS rows as the editable mapping rows for Irrigation1..N
+    desired_rows += [f"🚿 {canon} Events per Day (#)" for canon in visible_irrig_canons]
+
+    # Rows stay present even when not yet available
+    desired_rows += [
+        "🚿 Irrigation Events per Day (#) - Leaf Wetness",
+        "💧 Water Applied per Day (mL/m²·day)",
+        "💧 Water Applied per Day (mL/m²·day) - Leaf Wetness",
+    ]
+
+    # Reindex to force all rows to exist; missing ones become NaN -> later display as "-"
+    summary = summary.reindex(desired_rows)
+
 
     # --- Display formatting: per-row decimals + PPFD Min/Average as "-" ---
     ppfd_label_base = "Light Intensity (PPFD - µmol m⁻² s⁻¹)"
@@ -1551,7 +1625,7 @@ if numeric_cols:
                     val = np.nan
 
                 # Don't color the Target columns (keep them neutral)
-                if col in ["Low Target", "High Target"]:
+                if col in ["Data Column", "Low Target", "High Target"]:
                     set_color(row_label, col, "black")
                     continue
 
@@ -1609,24 +1683,248 @@ if numeric_cols:
 
         return style
 
-    style_df = build_style_df(summary_display, summary_numeric)
-    styler = (
-        summary_display.style
-        .apply(lambda _: style_df, axis=None)
-        # Center the numeric cells + make them bigger
-        .set_properties(subset=pd.IndexSlice[:, ["Min", "Average", "Max"]],
-                        **{"text-align": "center", "font-size": "18px"})
-        # Make the Min/Average/Max headers bigger + centered
-        .set_table_styles([
-            {"selector": "th.col_heading",
-            "props": [("text-align", "center"), ("font-size", "18px"), ("font-weight", "700")]},
-            # Keep row labels readable 
-            {"selector": "th.row_heading",
-            "props": [("text-align", "left"), ("font-size", "16px"), ("font-weight", "600")]},
-        ])
+    # ---------- Editable summary table (replace old HTML styler table) ----------
+    LOCKED_DATA_COLUMN = "-"
+
+    def _summary_row_to_canon(row_label: str) -> str | None:
+        s = str(row_label)
+
+        if "Air Temperature" in s:
+            return "AirTemp"
+        if "Leaf Temperature" in s:
+            return "LeafTemp"
+        if "Relative Humidity" in s:
+            return "RH"
+        if "Light Intensity" in s:
+            return "PAR"
+
+        # raw leaf wetness row is directly mappable
+        if "Leaf Wetness" in s and "Events per Day" not in s and "Water Applied" not in s:
+            return "LeafWetness"
+
+        # Use irrigation EVENTS rows as the mapping rows for Irrigation1..N
+        m = re.search(r"Irrigation(\d+)\s+Events per Day", s)
+        if m:
+            return f"Irrigation{m.group(1)}"
+
+        # derived-only rows: no direct mapping
+        if "Vapor Pressure Deficit" in s:
+            return None
+        if "Daily Light Integral" in s:
+            return None
+        if "Irrigation Events per Day (#) - Leaf Wetness" in s:
+            return None
+        if "Water Applied" in s:
+            return None
+
+        return None
+
+
+    def _row_allows_mapping(row_label: str) -> bool:
+        return _summary_row_to_canon(row_label) is not None
+
+
+    def _summary_row_data_column(row_label: str) -> str:
+        canon = _summary_row_to_canon(row_label)
+        if canon is None:
+            return LOCKED_DATA_COLUMN
+
+        raw = canon_to_raw_saved.get(canon)
+        return str(raw) if raw else LOCKED_DATA_COLUMN
+
+
+    def _target_pair_for_row(row_label: str):
+        s = str(row_label)
+
+        if "Air Temperature" in s:
+            return target_temp_low, target_temp_high
+        if "Leaf Temperature" in s:
+            return target_temp_low, target_temp_high
+        if "Relative Humidity" in s:
+            return target_rh_low, target_rh_high
+        if "Vapor Pressure Deficit" in s:
+            return target_vpd_low, target_vpd_high
+        if "Light Intensity" in s:
+            return None, target_ppfd
+        if "Daily Light Integral" in s:
+            return target_dli_low, target_dli_high
+
+        return None, None
+
+
+    raw_options = [LOCKED_DATA_COLUMN] + [str(c) for c in raw_cols_for_dropdown]
+
+    editor_rows = []
+    for row_label in summary_display.index:
+        low_t, high_t = _target_pair_for_row(row_label)
+
+        editor_rows.append({
+            "Metric": row_label,
+            "Data Column": _summary_row_data_column(row_label),
+            "Low Target": low_t,
+            "High Target": high_t,
+            "Min": summary_display.at[row_label, "Min"],
+            "Average": summary_display.at[row_label, "Average"],
+            "Max": summary_display.at[row_label, "Max"],
+        })
+
+    summary_editor_df = pd.DataFrame(editor_rows)
+
+    # ---------- Build a style DataFrame for the editor ----------
+    # Color styling on the read-only output columns.
+    editor_style_df = pd.DataFrame(
+        "",
+        index=summary_editor_df.index,
+        columns=summary_editor_df.columns,
     )
 
-    st.markdown(styler.to_html(), unsafe_allow_html=True)
+    # Reuse existing summary color logic
+    metric_style_df = build_style_df(summary_display, summary_numeric)
+
+    # Copy only Min / Average / Max colors from the old summary styling
+    for i, metric_label in summary_editor_df["Metric"].items():
+        if metric_label in metric_style_df.index:
+            for col in ["Min", "Average", "Max"]:
+                if col in metric_style_df.columns:
+                    editor_style_df.at[i, col] = metric_style_df.at[metric_label, col]
+
+    # Optional: keep Data Column / targets neutral
+    for col in ["Data Column", "Low Target", "High Target", "Metric"]:
+        if col in editor_style_df.columns:
+            editor_style_df[col] = ""
+
+    # ---------- Build styled editor ----------
+    styled_summary_editor = (
+        summary_editor_df.style
+        .apply(lambda _: editor_style_df, axis=None)
+        .format(
+            {
+                "Low Target": lambda x: "-" if pd.isna(x) else f"{float(x):.2f}",
+                "High Target": lambda x: "-" if pd.isna(x) else f"{float(x):.2f}",
+                "Min": lambda x: "-" if pd.isna(x) or x == "" else str(x),
+                "Average": lambda x: "-" if pd.isna(x) or x == "" else str(x),
+                "Max": lambda x: "-" if pd.isna(x) or x == "" else str(x),
+            }
+        )
+    )
+
+    edited_summary = st.data_editor(
+        styled_summary_editor,
+        hide_index=True,
+        width="stretch",
+        key=f"home_summary_editor_{int(rec['id'])}",
+        column_config={
+            "Metric": st.column_config.TextColumn("Metric", disabled=True, width="medium"),
+            "Data Column": st.column_config.SelectboxColumn(
+                "Data Column",
+                options=raw_options,
+                required=False,
+                help="Select which raw file column should map to this metric for this file.",
+                width="large",
+            ),
+            "Low Target": st.column_config.NumberColumn(
+                "Low Target",
+                required=False,
+                format="%.2f",
+                width="small",
+            ),
+            "High Target": st.column_config.NumberColumn(
+                "High Target",
+                required=False,
+                format="%.2f",
+                width="small",
+            ),
+            "Min": st.column_config.TextColumn("Min", disabled=True, width="small"),
+            "Average": st.column_config.TextColumn("Average", disabled=True, width="small"),
+            "Max": st.column_config.TextColumn("Max", disabled=True, width="small"),
+        },
+        disabled=["Metric", "Min", "Average", "Max"],
+    )    
+
+    locked_mask = ~edited_summary["Metric"].astype(str).apply(_row_allows_mapping)
+    edited_summary.loc[locked_mask, "Data Column"] = LOCKED_DATA_COLUMN
+    
+    
+    save_cols = st.columns([1, 5])
+    with save_cols[0]:
+        save_summary_table = st.button("Save", type="primary", key=f"save_summary_table_{int(rec['id'])}")
+    with save_cols[1]:
+        st.caption("Save to update setpoints and this file's column naming, and refresh the dashboard.")
+
+    if save_summary_table:
+        # -------- 1) Save targets to settings --------
+        def _row_by_contains(txt: str):
+            m = edited_summary[edited_summary["Metric"].astype(str).str.contains(txt, regex=False)]
+            return m.iloc[0] if not m.empty else None
+
+        r_air  = _row_by_contains("Air Temperature")
+        r_leaf = _row_by_contains("Leaf Temperature")
+        r_rh   = _row_by_contains("Relative Humidity")
+        r_vpd  = _row_by_contains("Vapor Pressure Deficit")
+        r_par  = _row_by_contains("Light Intensity")
+        r_dli  = _row_by_contains("Daily Light Integral")
+
+        db.update_targets_from_summary_table(
+            user["id"],
+            target_low=_safe_float(r_air["Low Target"]) if r_air is not None else None,
+            target_high=_safe_float(r_air["High Target"]) if r_air is not None else None,
+            target_rh_low=_safe_float(r_rh["Low Target"]) if r_rh is not None else None,
+            target_rh_high=_safe_float(r_rh["High Target"]) if r_rh is not None else None,
+            target_ppfd=_safe_float(r_par["High Target"]) if r_par is not None else None,
+            target_dli_low=_safe_float(r_dli["Low Target"]) if r_dli is not None else None,
+            target_dli_high=_safe_float(r_dli["High Target"]) if r_dli is not None else None,
+            target_vpd_low=_safe_float(r_vpd["Low Target"]) if r_vpd is not None else None,
+            target_vpd_high=_safe_float(r_vpd["High Target"]) if r_vpd is not None else None,
+        )
+
+        # -------- 2) Save per-file canon_to_raw mapping --------
+        new_canon_to_raw = dict(canon_to_raw_saved)
+
+        for _, row in edited_summary.iterrows():
+            canon = _summary_row_to_canon(row["Metric"])
+            if canon is None:
+                continue
+
+            selected_raw = row["Data Column"]
+            if selected_raw in (None, "", LOCKED_DATA_COLUMN):
+                new_canon_to_raw[canon] = None
+            else:
+                new_canon_to_raw[canon] = str(selected_raw)
+
+        db.upsert_file_column_map(
+            user["id"],
+            int(rec["id"]),
+            raw_columns=[str(c) for c in raw_cols_for_dropdown],
+            canon_to_raw=new_canon_to_raw,
+            raw_preview_rows=None,
+        )
+
+        # -------- 3) Regenerate cleaned file bytes from raw upload --------
+        raw_obj = db.get_raw_file_bytes(int(rec["id"]))
+        if raw_obj is None:
+            st.error("This file does not have raw upload bytes saved, so the cleaned file cannot be regenerated. Re-upload the original file once to enable summary-table mapping edits.")
+            st.stop()
+
+        raw_filename = raw_obj["raw_filename"]
+        ext = Path(raw_filename).suffix or ".csv"
+        df_raw2, _, _, _ = load_table_from_bytes(raw_obj["bytes"], ext)
+
+        raw_to_canon = _invert_canon_to_raw(new_canon_to_raw)
+        df_clean2 = build_clean_dataframe(df_raw2, raw_to_canon)
+
+        required_for_dashboard = ["Time", "AirTemp", "RH"]
+        missing = [c for c in required_for_dashboard if c not in df_clean2.columns]
+        if missing:
+            st.error(
+                "Cannot apply this mapping because the cleaned dashboard file would be missing required columns: "
+                + ", ".join(missing)
+            )
+            st.stop()
+
+        cleaned_bytes2 = df_clean2.to_csv(index=False).encode("utf-8")
+        db.update_file_content(int(rec["id"]), cleaned_bytes2)
+
+        st.rerun()
 
 else:
     st.info("No numeric columns found to summarize.")
@@ -1687,19 +1985,31 @@ if summary is not None:
     def _strip_non_ascii(s: str) -> str:
         return s.encode("ascii", errors="ignore").decode("ascii").strip()
 
-    summary_display_pdf = summary_display.copy()
-    summary_display_pdf.index = [_strip_non_ascii(str(x)) for x in summary_display_pdf.index]
+    # Build a PDF display frame that also includes the saved Data Column selections
+    summary_pdf_display = summary_display.copy()
+    summary_pdf_numeric = summary_numeric.copy()
 
-    # Build color style table (same logic used for the website table)
-    style_df_pdf = build_style_df(summary_display, summary_numeric)  # keep original index for lookup
+    pdf_data_cols = []
+    for row_label in summary_pdf_display.index:
+        pdf_data_cols.append(_summary_row_data_column(row_label))
+
+    summary_pdf_display.insert(0, "Data Column", pdf_data_cols)
+    summary_pdf_numeric.insert(0, "Data Column", np.nan)
+
+    # Strip emojis for PDF rendering only
+    summary_pdf_display_render = summary_pdf_display.copy()
+    summary_pdf_display_render.index = [_strip_non_ascii(str(x)) for x in summary_pdf_display_render.index]
+
+    # Build color style table from the unstripped version
+    style_df_pdf = build_style_df(summary_pdf_display, summary_pdf_numeric)
 
     tbl = ax_summary.table(
-        cellText=summary_display_pdf.values,
-        rowLabels=summary_display_pdf.index,
-        colLabels=summary_display_pdf.columns,
+        cellText=summary_pdf_display_render.values,
+        rowLabels=summary_pdf_display_render.index,
+        colLabels=summary_pdf_display.columns,
         loc="center",
-        cellLoc="center",   # centers body cells (helps a lot)
-        colLoc="center",    # centers column headers
+        cellLoc="center",
+        colLoc="center",
     )
 
     tbl.auto_set_font_size(False)
@@ -1724,10 +2034,10 @@ if summary is not None:
 
         # Apply red/blue/black coloring to data cells (not headers)
         if r >= 1 and c >= 0:
-            row_label_original = summary_display.index[r - 1]  # original (with emoji) index
-            col_name = summary_display.columns[c]
+            row_label_original = summary_pdf_display.index[r - 1]
+            col_name = summary_pdf_display.columns[c]
 
-            css = style_df_pdf.at[row_label_original, col_name]  # e.g. "color: red;"
+            css = style_df_pdf.at[row_label_original, col_name]
             m = re.search(r"color:\s*([^;]+)", str(css))
             if m:
                 cell.get_text().set_color(m.group(1).strip())

@@ -371,6 +371,58 @@ def update_leaf_wetness_event_settings(
     cur.close()
     conn.close()
 
+def update_targets_from_summary_table(
+    user_id: int,
+    *,
+    target_low: Optional[float] = None,
+    target_high: Optional[float] = None,
+    target_rh_low: Optional[float] = None,
+    target_rh_high: Optional[float] = None,
+    target_ppfd: Optional[float] = None,
+    target_dli_low: Optional[float] = None,
+    target_dli_high: Optional[float] = None,
+    target_vpd_low: Optional[float] = None,
+    target_vpd_high: Optional[float] = None,
+) -> None:
+    """
+    Update ONLY the target setpoints that are provided (non-None).
+    Uses UPSERT so it works even if the settings row doesn't exist yet.
+    """
+    conn = get_conn()
+    cur = conn.cursor()
+
+    # Ensure row exists
+    cur.execute(
+        "INSERT INTO settings (user_id) VALUES (%s) ON CONFLICT (user_id) DO NOTHING;",
+        (user_id,),
+    )
+
+    sets = []
+    vals = []
+
+    def add(col, val):
+        if val is not None:
+            sets.append(f"{col} = %s")
+            vals.append(float(val))
+
+    add("target_low", target_low)
+    add("target_high", target_high)
+    add("target_rh_low", target_rh_low)
+    add("target_rh_high", target_rh_high)
+    add("target_ppfd", target_ppfd)
+    add("target_dli_low", target_dli_low)
+    add("target_dli_high", target_dli_high)
+    add("target_vpd_low", target_vpd_low)
+    add("target_vpd_high", target_vpd_high)
+
+    if sets:
+        q = "UPDATE settings SET " + ", ".join(sets) + " WHERE user_id = %s;"
+        vals.append(user_id)
+        cur.execute(q, tuple(vals))
+
+    conn.commit()
+    cur.close()
+    conn.close()
 
 # -------- Files (cleaned CSVs in Neon) --------
 
