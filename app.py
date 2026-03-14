@@ -773,6 +773,43 @@ st.markdown("""
     </style>
     """, unsafe_allow_html=True)
 
+st.markdown("""
+    <style>
+    /* Scope only to the summary editor (its key becomes a CSS class) */
+    [class*="st-key-home_summary_editor_"] [data-testid="stDataEditor"] [role="columnheader"] {
+        justify-content: center !important;
+        text-align: center !important;
+    }
+
+    [class*="st-key-home_summary_editor_"] [data-testid="stDataEditor"] [role="columnheader"] * {
+        justify-content: center !important;
+        text-align: center !important;
+    }
+
+    /* Grid cells */
+    [class*="st-key-home_summary_editor_"] [data-testid="stDataEditor"] [role="gridcell"] {
+        text-align: center !important;
+    }
+
+    [class*="st-key-home_summary_editor_"] [data-testid="stDataEditor"] [role="gridcell"] > div {
+        width: 100% !important;
+        justify-content: center !important;
+        text-align: center !important;
+    }
+
+    /* Editable number/text inputs */
+    [class*="st-key-home_summary_editor_"] [data-testid="stDataEditor"] input {
+        text-align: center !important;
+    }
+
+    /* Selectbox display */
+    [class*="st-key-home_summary_editor_"] [data-testid="stDataEditor"] [data-baseweb="select"] > div,
+    [class*="st-key-home_summary_editor_"] [data-testid="stDataEditor"] [data-baseweb="select"] span {
+        justify-content: center !important;
+        text-align: center !important;
+    }
+    </style>
+    """, unsafe_allow_html=True)
 
 # ---------- Main content ----------
 
@@ -1685,6 +1722,7 @@ if numeric_cols:
 
     # ---------- Editable summary table (replace old HTML styler table) ----------
     LOCKED_DATA_COLUMN = "-"
+    UNMAPPED_DATA_COLUMN = "Blank - Click to Select Data"
 
     def _summary_row_to_canon(row_label: str) -> str | None:
         s = str(row_label)
@@ -1730,7 +1768,7 @@ if numeric_cols:
             return LOCKED_DATA_COLUMN
 
         raw = canon_to_raw_saved.get(canon)
-        return str(raw) if raw else LOCKED_DATA_COLUMN
+        return str(raw) if raw else UNMAPPED_DATA_COLUMN
 
 
     def _target_pair_for_row(row_label: str):
@@ -1751,8 +1789,26 @@ if numeric_cols:
 
         return None, None
 
+    def _target_mode_for_row(row_label: str) -> str:
+        s = str(row_label)
 
-    raw_options = [LOCKED_DATA_COLUMN] + [str(c) for c in raw_cols_for_dropdown]
+        if "Air Temperature" in s:
+            return "both"
+        if "Leaf Temperature" in s:
+            return "both"
+        if "Relative Humidity" in s:
+            return "both"
+        if "Vapor Pressure Deficit" in s:
+            return "both"
+        if "Daily Light Integral" in s:
+            return "both"
+        if "Light Intensity" in s:
+            return "high_only"
+
+        return "none"
+
+    #raw_options = [LOCKED_DATA_COLUMN] + [str(c) for c in raw_cols_for_dropdown]
+    raw_options = [UNMAPPED_DATA_COLUMN] + [str(c) for c in raw_cols_for_dropdown]
 
     editor_rows = []
     for row_label in summary_display.index:
@@ -1799,8 +1855,8 @@ if numeric_cols:
         .apply(lambda _: editor_style_df, axis=None)
         .format(
             {
-                "Low Target": lambda x: "-" if pd.isna(x) else f"{float(x):.2f}",
-                "High Target": lambda x: "-" if pd.isna(x) else f"{float(x):.2f}",
+                #"Low Target": lambda x: "-" if pd.isna(x) else f"{float(x):.2f}",
+                #"High Target": lambda x: "-" if pd.isna(x) else f"{float(x):.2f}",
                 "Min": lambda x: "-" if pd.isna(x) or x == "" else str(x),
                 "Average": lambda x: "-" if pd.isna(x) or x == "" else str(x),
                 "Max": lambda x: "-" if pd.isna(x) or x == "" else str(x),
@@ -1812,6 +1868,7 @@ if numeric_cols:
         styled_summary_editor,
         hide_index=True,
         width="stretch",
+        #height="content",
         key=f"home_summary_editor_{int(rec['id'])}",
         column_config={
             "Metric": st.column_config.TextColumn("Metric", disabled=True, width="medium"),
@@ -1819,7 +1876,7 @@ if numeric_cols:
                 "Data Column",
                 options=raw_options,
                 required=False,
-                help="Select which raw file column should map to this metric for this file.",
+                help="Select which file column should map to this metric for this file. Rows showing '-' are calculated values and cannot be mapped.",
                 width="large",
             ),
             "Low Target": st.column_config.NumberColumn(
@@ -1841,9 +1898,25 @@ if numeric_cols:
         disabled=["Metric", "Min", "Average", "Max"],
     )    
 
-    locked_mask = ~edited_summary["Metric"].astype(str).apply(_row_allows_mapping)
-    edited_summary.loc[locked_mask, "Data Column"] = LOCKED_DATA_COLUMN
-    
+    for i, row in edited_summary.iterrows():
+        metric = str(row["Metric"])
+
+        # Data Column behavior
+        if not _row_allows_mapping(metric):
+            edited_summary.at[i, "Data Column"] = LOCKED_DATA_COLUMN
+        else:
+            current_val = edited_summary.at[i, "Data Column"]
+            if current_val in (None, "", IGNORE_RAW):
+                edited_summary.at[i, "Data Column"] = UNMAPPED_DATA_COLUMN
+
+        # Target behavior
+        target_mode = _target_mode_for_row(metric)
+
+        if target_mode == "none":
+            edited_summary.at[i, "Low Target"] = None
+            edited_summary.at[i, "High Target"] = None
+        elif target_mode == "high_only":
+            edited_summary.at[i, "Low Target"] = None
     
     save_cols = st.columns([1, 5])
     with save_cols[0]:
@@ -1886,7 +1959,7 @@ if numeric_cols:
                 continue
 
             selected_raw = row["Data Column"]
-            if selected_raw in (None, "", LOCKED_DATA_COLUMN):
+            if selected_raw in (None, "", LOCKED_DATA_COLUMN, UNMAPPED_DATA_COLUMN):
                 new_canon_to_raw[canon] = None
             else:
                 new_canon_to_raw[canon] = str(selected_raw)
