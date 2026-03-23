@@ -1724,6 +1724,28 @@ if numeric_cols:
     LOCKED_DATA_COLUMN = "-"
     UNMAPPED_DATA_COLUMN = "Blank - Click to Select Data"
 
+    def _build_data_column_tokens(raw_cols: list[str]):
+        """
+        Build 1-based tokens for raw columns:
+        token "1" -> first raw column
+        token "2" -> second raw column
+        """
+        token_to_raw = {str(i + 1): str(raw) for i, raw in enumerate(raw_cols)}
+        raw_to_token = {raw: token for token, raw in token_to_raw.items()}
+        token_to_label = {token: f"[{token}] {raw}" for token, raw in token_to_raw.items()}
+        return token_to_raw, raw_to_token, token_to_label
+
+    token_to_raw, raw_to_token, token_to_label = _build_data_column_tokens(raw_cols_for_dropdown)
+
+    def _format_data_column_option(val):
+        """
+        How Data Column values appear in the dropdown/editor.
+        Keep sentinel values as-is.
+        """
+        if val in (None, "", LOCKED_DATA_COLUMN, UNMAPPED_DATA_COLUMN):
+            return val
+        return token_to_label.get(str(val), str(val))
+
     def _summary_row_to_canon(row_label: str) -> str | None:
         s = str(row_label)
 
@@ -1768,8 +1790,10 @@ if numeric_cols:
             return LOCKED_DATA_COLUMN
 
         raw = canon_to_raw_saved.get(canon)
-        return str(raw) if raw else UNMAPPED_DATA_COLUMN
+        if not raw:
+            return UNMAPPED_DATA_COLUMN
 
+        return raw_to_token.get(str(raw), UNMAPPED_DATA_COLUMN)
 
     def _target_pair_for_row(row_label: str):
         s = str(row_label)
@@ -1808,7 +1832,7 @@ if numeric_cols:
         return "none"
 
     #raw_options = [LOCKED_DATA_COLUMN] + [str(c) for c in raw_cols_for_dropdown]
-    raw_options = [UNMAPPED_DATA_COLUMN] + [str(c) for c in raw_cols_for_dropdown]
+    raw_options = [UNMAPPED_DATA_COLUMN] + list(token_to_raw.keys())
 
     editor_rows = []
     for row_label in summary_display.index:
@@ -1853,6 +1877,10 @@ if numeric_cols:
     styled_summary_editor = (
         summary_editor_df.style
         .apply(lambda _: editor_style_df, axis=None)
+        .set_properties(
+            subset=["Min", "Average", "Max"],
+            **{"text-align":"right"}
+        )
         .format(
             {
                 #"Low Target": lambda x: "-" if pd.isna(x) else f"{float(x):.2f}",
@@ -1873,11 +1901,12 @@ if numeric_cols:
         column_config={
             "Metric": st.column_config.TextColumn("Metric", disabled=True, width="medium"),
             "Data Column": st.column_config.SelectboxColumn(
-                "Data Column",
+                "Data",
                 options=raw_options,
                 required=False,
+                format_func=_format_data_column_option,
                 help="Select which file column should map to this metric for this file. Rows showing '-' are calculated values and cannot be mapped.",
-                width="large",
+                width="small",
             ),
             "Low Target": st.column_config.NumberColumn(
                 "Low Target",
@@ -1958,11 +1987,11 @@ if numeric_cols:
             if canon is None:
                 continue
 
-            selected_raw = row["Data Column"]
-            if selected_raw in (None, "", LOCKED_DATA_COLUMN, UNMAPPED_DATA_COLUMN):
+            selected_token = row["Data Column"]
+            if selected_token in (None, "", LOCKED_DATA_COLUMN, UNMAPPED_DATA_COLUMN):
                 new_canon_to_raw[canon] = None
             else:
-                new_canon_to_raw[canon] = str(selected_raw)
+                new_canon_to_raw[canon] = token_to_raw.get(str(selected_token))
 
         db.upsert_file_column_map(
             user["id"],
@@ -2064,7 +2093,8 @@ if summary is not None:
 
     pdf_data_cols = []
     for row_label in summary_pdf_display.index:
-        pdf_data_cols.append(_summary_row_data_column(row_label))
+        raw_val = _summary_row_data_column(row_label)
+        pdf_data_cols.append(_format_data_column_option(raw_val))
 
     summary_pdf_display.insert(0, "Data Column", pdf_data_cols)
     summary_pdf_numeric.insert(0, "Data Column", np.nan)
