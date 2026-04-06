@@ -47,7 +47,8 @@ def require_login():
 def render_sidebar():
     """Render the shared sidebar with nav on every page."""
     with st.sidebar:
-        st.title("🌿 EnDash")
+        #st.title("🌿 EnDash")
+        st.image("assets/EnDash_Logo_V1.png", use_container_width=False, width=170)
 
         user = current_user()
 

@@ -17,3 +17,6 @@ data/uploads/
 uploads/
 
 .venv/
+
+#Assets (logo)
+assets/

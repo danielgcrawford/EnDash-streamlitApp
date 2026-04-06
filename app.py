@@ -17,10 +17,12 @@ import csv
 from io import StringIO
 
 st.set_page_config(
-    page_title="EnDash - Quick View Dashboard",
+    page_title="EnDash - Climate Data Analysis",
     page_icon="🌿",
     layout="wide",
 )
+
+#st.logo("assets/EnDash_Logo_V1.png")
 
 # ----- Center title and button text -----
 st.markdown(
@@ -814,8 +816,8 @@ st.markdown("""
 # ---------- Main content ----------
 
 user = auth.current_user()
-st.title("🌿 EnDash")
-st.divider()
+#st.title("🌿 EnDash")
+#st.divider()
 
 if not user:
     # ----- Login view -----
@@ -861,7 +863,7 @@ left_col, right_col = st.columns(2, gap="medium")
 
 with left_col:
     #st.markdown("### New File Upload")
-    st.subheader("New File Upload", help="Upload a file to add it to your dashboard. To edit column selections, use the Data File Settings page. To edit units and target setpoints, use the Climate Units and Setpoints page.")
+    st.subheader("New File Upload", help="Upload a file to add it to your dashboard.")
     #st.caption()
 
     #Functions added to accept variable row of column headings and separate Date/Time
@@ -1043,7 +1045,7 @@ with left_col:
 
 with right_col:
     # ----- File selection (Next to Quick Upload) -----
-    st.subheader("Current File Selection", help="Choose which previously uploaded file the dashboard should display. To edit column selections, use the Data File Settings page. To edit units and target setpoints, use the Climate Units and Setpoints page.")
+    st.subheader("Current File Selection", help="Select a stored file to view.")
 
     files = db.list_user_files(user["id"])
     if not files:
@@ -1202,7 +1204,7 @@ if orig_light_unit == "PPFD" and "Time" in df_display.columns and "PAR" in df_di
 # =========================
 # Dashboard Summary section
 # =========================
-st.subheader("Dashboard Summary", help="Upload a new file or select one from above to view your dashboard. To edit column selections, use the Data File Settings page. To edit units and target setpoints, use the Climate Units and Setpoints page.")
+#st.subheader("Dashboard Summary", help="Upload a new file or select one from above to view your dashboard. To edit column selections, use the Data File Settings page. To edit units and target setpoints, use the Climate Units and Setpoints page.")
 #st.caption(f"Showing selected file: `{rec['filename']}` (uploaded {rec['uploaded_at']}).")
 
 # Summary sentence
@@ -1217,128 +1219,132 @@ if "Time" in df_display.columns and df_display["Time"].notna().any():
         interval_td = time_sorted.iloc[1] - time_sorted.iloc[0]
 
     interval_str = format_timedelta(interval_td) if interval_td is not None else "unknown"
-    st.caption(
+    st.subheader(
+        f"Data Summary from "
         f"**{start_time.strftime('%Y-%m-%d %H:%M:%S')}** "
-        f"to **{end_time.strftime('%Y-%m-%d %H:%M:%S')}**, "
-        f"approximate sampling interval of **{interval_str}**."
+        f"to **{end_time.strftime('%Y-%m-%d %H:%M:%S')}** "
+        f" - Interval: **{interval_str}**",
+        help="Upload a new file or select a stored file to view your data summary."
     )
 else:
     st.caption("Time information is not available in this file.")
 
-# -----------------------------
-# Summary metrics (3 columns)
-# -----------------------------
-metric_cols = st.columns(3, gap="medium")
 
-# --- Air Temperature ---
-temp_badge = badge_html("n/a", "badge-na")
-temp_within_pct = None
 
-if air_disp is not None and air_disp.notna().any():
-    air_mean = float(air_disp.mean(skipna=True))
+# # -----------------------------
+# # Summary metrics (3 columns)
+# # -----------------------------
+# metric_cols = st.columns(3, gap="medium")
 
-    temp_series = air_disp.dropna()
-    if len(temp_series) > 0:
-        within_mask = (temp_series >= target_temp_low) & (temp_series <= target_temp_high)
-        temp_within_pct = 100.0 * float(within_mask.mean())
+# # --- Air Temperature ---
+# temp_badge = badge_html("n/a", "badge-na")
+# temp_within_pct = None
 
-    # Determine mean position relative to band (for label text + color)
-    if air_mean < target_temp_low:
-        state_txt = "Below target band"
-        cls = "badge-low"
-    elif air_mean > target_temp_high:
-        state_txt = "Above target band"
-        cls = "badge-high"
-    else:
-        state_txt = "Within target band"
-        cls = "badge-good"
+# if air_disp is not None and air_disp.notna().any():
+#     air_mean = float(air_disp.mean(skipna=True))
 
-    pct_txt = "-" if temp_within_pct is None else f"{temp_within_pct:.0f}% within range"
-    temp_badge = badge_html(f"{state_txt} · {pct_txt}", cls)
+#     temp_series = air_disp.dropna()
+#     if len(temp_series) > 0:
+#         within_mask = (temp_series >= target_temp_low) & (temp_series <= target_temp_high)
+#         temp_within_pct = 100.0 * float(within_mask.mean())
 
-    metric_cols[0].metric(
-        label=f"Average Air Temperature ({'°F' if temp_unit == 'F' else '°C'})",
-        value=f"{air_mean:.1f}",
-    )
-    metric_cols[0].markdown(temp_badge, unsafe_allow_html=True)
-else:
-    metric_cols[0].metric(
-        label=f"Average Air Temperature ({'°F' if temp_unit == 'F' else '°C'})",
-        value="—",
-    )
-    metric_cols[0].markdown(temp_badge, unsafe_allow_html=True)
+#     # Determine mean position relative to band (for label text + color)
+#     if air_mean < target_temp_low:
+#         state_txt = "Below target band"
+#         cls = "badge-low"
+#     elif air_mean > target_temp_high:
+#         state_txt = "Above target band"
+#         cls = "badge-high"
+#     else:
+#         state_txt = "Within target band"
+#         cls = "badge-good"
 
-# --- Relative Humidity ---
-rh_badge = badge_html("n/a", "badge-na")
-rh_within_pct = None
+#     pct_txt = "-" if temp_within_pct is None else f"{temp_within_pct:.0f}% within range"
+#     temp_badge = badge_html(f"{state_txt} · {pct_txt}", cls)
 
-if rh is not None and rh.notna().any():
-    rh_mean = float(rh.mean(skipna=True))
+#     metric_cols[0].metric(
+#         label=f"Average Air Temperature ({'°F' if temp_unit == 'F' else '°C'})",
+#         value=f"{air_mean:.1f}",
+#     )
+#     metric_cols[0].markdown(temp_badge, unsafe_allow_html=True)
+# else:
+#     metric_cols[0].metric(
+#         label=f"Average Air Temperature ({'°F' if temp_unit == 'F' else '°C'})",
+#         value="—",
+#     )
+#     metric_cols[0].markdown(temp_badge, unsafe_allow_html=True)
 
-    rh_series = rh.dropna()
-    if len(rh_series) > 0:
-        rh_within_mask = (rh_series >= target_rh_low) & (rh_series <= target_rh_high)
-        rh_within_pct = 100.0 * float(rh_within_mask.mean())
+# # --- Relative Humidity ---
+# rh_badge = badge_html("n/a", "badge-na")
+# rh_within_pct = None
 
-    if rh_mean < target_rh_low:
-        state_txt = "Below target band"
-        cls = "badge-low"
-    elif rh_mean > target_rh_high:
-        state_txt = "Above target band"
-        cls = "badge-high"
-    else:
-        state_txt = "Within target band"
-        cls = "badge-good"
+# if rh is not None and rh.notna().any():
+#     rh_mean = float(rh.mean(skipna=True))
 
-    pct_txt = "-" if rh_within_pct is None else f"{rh_within_pct:.0f}% within range"
-    rh_badge = badge_html(f"{state_txt} · {pct_txt}", cls)
+#     rh_series = rh.dropna()
+#     if len(rh_series) > 0:
+#         rh_within_mask = (rh_series >= target_rh_low) & (rh_series <= target_rh_high)
+#         rh_within_pct = 100.0 * float(rh_within_mask.mean())
 
-    metric_cols[1].metric(
-        label="Average Relative Humidity (%)",
-        value=f"{rh_mean:.0f}",
-    )
-    metric_cols[1].markdown(rh_badge, unsafe_allow_html=True)
-else:
-    metric_cols[1].metric(
-        label="Average Relative Humidity (%)",
-        value="—",
-    )
-    metric_cols[1].markdown(rh_badge, unsafe_allow_html=True)
+#     if rh_mean < target_rh_low:
+#         state_txt = "Below target band"
+#         cls = "badge-low"
+#     elif rh_mean > target_rh_high:
+#         state_txt = "Above target band"
+#         cls = "badge-high"
+#     else:
+#         state_txt = "Within target band"
+#         cls = "badge-good"
 
-# --- DLI (no band; above/below setpoint only) ---
-dli_badge = badge_html("n/a", "badge-na")
+#     pct_txt = "-" if rh_within_pct is None else f"{rh_within_pct:.0f}% within range"
+#     rh_badge = badge_html(f"{state_txt} · {pct_txt}", cls)
 
-if daily_dli_series is not None and not daily_dli_series.empty:
-    dli_mean = float(daily_dli_series.mean())
+#     metric_cols[1].metric(
+#         label="Average Relative Humidity (%)",
+#         value=f"{rh_mean:.0f}",
+#     )
+#     metric_cols[1].markdown(rh_badge, unsafe_allow_html=True)
+# else:
+#     metric_cols[1].metric(
+#         label="Average Relative Humidity (%)",
+#         value="—",
+#     )
+#     metric_cols[1].markdown(rh_badge, unsafe_allow_html=True)
 
-    pct_days_below = 100.0 * float((daily_dli_series < target_dli_low).mean())
-    pct_days_within = 100.0 * float(((daily_dli_series >= target_dli_low) & (daily_dli_series <= target_dli_high)).mean())
-    pct_days_above = 100.0 * float((daily_dli_series > target_dli_high).mean())
+# # --- DLI (no band; above/below setpoint only) ---
+# dli_badge = badge_html("n/a", "badge-na")
 
-    # Badge state based on MEAN (simple + intuitive)
-    if dli_mean < target_dli_low:
-        state_txt = "Below band"
-        cls = "badge-high"      # red
-    elif dli_mean > target_dli_high:
-        state_txt = "Above band"
-        cls = "badge-high"      # red (or create a separate warning class if you want)
-    else:
-        state_txt = "Within band"
-        cls = "badge-good"      # green
+# if daily_dli_series is not None and not daily_dli_series.empty:
+#     dli_mean = float(daily_dli_series.mean())
 
-    dli_badge = badge_html(f"{state_txt} · {pct_days_within:.0f}% days within target", cls)
+#     pct_days_below = 100.0 * float((daily_dli_series < target_dli_low).mean())
+#     pct_days_within = 100.0 * float(((daily_dli_series >= target_dli_low) & (daily_dli_series <= target_dli_high)).mean())
+#     pct_days_above = 100.0 * float((daily_dli_series > target_dli_high).mean())
 
-    metric_cols[2].metric(
-        label="Average DLI (mol m⁻² d⁻¹)",
-        value=f"{dli_mean:.1f}",
-    )
-    metric_cols[2].markdown(dli_badge, unsafe_allow_html=True)
-else:
-    metric_cols[2].metric(
-        label="Average DLI (mol m⁻² d⁻¹)",
-        value="—",
-    )
-    metric_cols[2].markdown(dli_badge, unsafe_allow_html=True)
+#     # Badge state based on MEAN (simple + intuitive)
+#     if dli_mean < target_dli_low:
+#         state_txt = "Below band"
+#         cls = "badge-high"      # red
+#     elif dli_mean > target_dli_high:
+#         state_txt = "Above band"
+#         cls = "badge-high"      # red (or create a separate warning class if you want)
+#     else:
+#         state_txt = "Within band"
+#         cls = "badge-good"      # green
+
+#     dli_badge = badge_html(f"{state_txt} · {pct_days_within:.0f}% days within target", cls)
+
+#     metric_cols[2].metric(
+#         label="Average DLI (mol m⁻² d⁻¹)",
+#         value=f"{dli_mean:.1f}",
+#     )
+#     metric_cols[2].markdown(dli_badge, unsafe_allow_html=True)
+# else:
+#     metric_cols[2].metric(
+#         label="Average DLI (mol m⁻² d⁻¹)",
+#         value="—",
+#     )
+#     metric_cols[2].markdown(dli_badge, unsafe_allow_html=True)
 
 # Optional single highlight message 
 #if temp_within_pct is not None:
@@ -1349,10 +1355,11 @@ else:
 #    else:
 #        st.success(f"About **{temp_within_pct:.0f}%** of air temperature readings were within your target band.")
 
+
 # =========================
 # Summary Statistics
 # =========================
-st.subheader("Summary Statistics")
+#st.subheader("Summary Statistics")
 
 # --- Identify irrigation canonical columns (Irrigation1..IrrigationN) ---
 irrigation_cols = _sorted_irrigation_cols(
@@ -2035,7 +2042,7 @@ else:
 # Time Series (Dashboard graphs)
 # =========================
 #st.markdown("### Key Trends")
-st.subheader("Time series graphs")
+#st.subheader("Time series graphs")
 
 use_time_axis = "Time" in df_display.columns and df_display["Time"].notna().any()
 x_values = df_display["Time"] if use_time_axis else df_display.index
@@ -2063,9 +2070,9 @@ ax_cover.text(0.07, 0.64, f"PPFD max: {target_ppfd:.1f} µmol m⁻² s⁻¹", fo
 ax_cover.text(0.07, 0.61, f"DLI band: {target_dli_low:.1f} mol m⁻² d⁻¹ to {target_dli_high:.1f} mol m⁻² d⁻¹", fontsize=11)
 ax_cover.text(0.07, 0.58, f"VPD band: {target_vpd_low:.2f} to {target_vpd_high:.2f} kPa", fontsize=11)
 
-if temp_within_pct is not None:
-    ax_cover.text(0.05, 0.50, "Summary", fontsize=13, fontweight="bold")
-    ax_cover.text(0.07, 0.46, f"Time in target temperature band: {temp_within_pct:.0f}%", fontsize=11)
+# if temp_within_pct is not None:
+#     ax_cover.text(0.05, 0.50, "Summary", fontsize=13, fontweight="bold")
+#     ax_cover.text(0.07, 0.46, f"Time in target temperature band: {temp_within_pct:.0f}%", fontsize=11)
 
 figs_for_pdf.append(fig_cover)
 
