@@ -1483,68 +1483,12 @@ events_by_zone = irrig_stats.get("events_by_zone", None)   # DataFrame (days x z
 events_total = irrig_stats.get("events_total", None)       # Series (days)
 
 
-# --- Leaf Wetness Irrigation Calculations ---
-# Rule to count a Leaf Wetness irrigation event:
-#   1) current reading rises more than irrigation_sensitivity_pct (%) above previous reading, AND
-#   2) the event is at least leaf_wetness_min_interval_min minutes after the last counted LW event.
-LEAF_WETNESS_EVENT_COL = "IrrigationEvents_LeafWetness"
-
-def detect_leaf_wetness_event_times(time_s: pd.Series, lw_s: pd.Series, sensitivity_pct: float, min_gap_min: float) -> pd.DatetimeIndex:
-    t = pd.to_datetime(time_s, errors="coerce")
-    lw = pd.to_numeric(lw_s, errors="coerce")
-
-    prev = lw.shift(1)
-    denom = prev.where(prev.abs() > 1e-9)  # prevent divide-by-zero
-    rise_pct = ((lw - prev) / denom) * 100.0
-
-    # Candidate events = sensitivity threshold exceeded
-    cand = t[(rise_pct > float(sensitivity_pct)) & rise_pct.notna()].dropna().sort_values()
-    if cand.empty:
-        return pd.DatetimeIndex([])
-
-    if float(min_gap_min) <= 0:
-        return pd.DatetimeIndex(cand)
-
-    gap = pd.Timedelta(minutes=float(min_gap_min))
-    kept = [cand.iloc[0]]
-    last = kept[0]
-    for cur in cand.iloc[1:]:
-        if (cur - last) >= gap:
-            kept.append(cur)
-            last = cur
-    return pd.DatetimeIndex(kept)
-
-# Build 0/1 event column
-df_display[LEAF_WETNESS_EVENT_COL] = 0
-if "LeafWetness" in df_display.columns and "Time" in df_display.columns:
-    lw_event_times = detect_leaf_wetness_event_times(
-        df_display["Time"],
-        df_display["LeafWetness"],
-        sensitivity_pct=irrigation_sensitivity_pct,
-        min_gap_min=leaf_wetness_min_interval_min,
-    )
-    if len(lw_event_times) > 0:
-        # mark rows whose timestamps match counted event times
-        df_display.loc[df_display["Time"].isin(lw_event_times), LEAF_WETNESS_EVENT_COL] = 1
-
-
-#Irrigation Events per Day Leaf Wetness
-leafwetness_daily_counts = None
-if LEAF_WETNESS_EVENT_COL in df_display.columns and df_display[LEAF_WETNESS_EVENT_COL].sum() > 0:
-    full_days = find_full_days(df_display["Time"])  # existing helper you already use elsewhere
-    if full_days:
-        df_full = df_display[df_display["Time"].dt.normalize().isin(full_days)].copy()
-        daily = df_full[df_full[LEAF_WETNESS_EVENT_COL] == 1].groupby(df_full["Time"].dt.normalize()).size()
-
-        # Ensure every full day appears (0 if none)
-        leafwetness_daily_counts = daily.reindex(full_days, fill_value=0)
-
-
 # Build the summary table from numeric columns EXCLUDING irrigation raw signals
 numeric_cols = df_display.select_dtypes(include="number").columns.tolist()
 numeric_cols = [c for c in numeric_cols if c not in irrigation_cols]
 # do not show the 0/1 leaf-wetness event marker column in Summary Statistics
-numeric_cols = [c for c in numeric_cols if c != LEAF_WETNESS_EVENT_COL]
+numeric_cols = [c for c in numeric_cols if c != "LeafWetness"]
+numeric_cols = [c for c in numeric_cols if c != "IrrigationEvents_LeafWetness"]
 
 summary = None
 summary_display = None
@@ -1606,14 +1550,7 @@ if numeric_cols:
             )
             summary = pd.concat([summary, irrig_row], axis=0)
 
-    # ---- Add Leaf Wetness irrigation events/day row ---
-    if leafwetness_daily_counts is not None and not leafwetness_daily_counts.empty:
-        lw_row = pd.DataFrame(
-            {"Min": [leafwetness_daily_counts.min()], "Average": [leafwetness_daily_counts.mean()], "Max": [leafwetness_daily_counts.max()]},
-            index=["Irrigation Events per Day (#) - Leaf Wetness"],
-        )
-        summary = pd.concat([summary, lw_row], axis=0)
-    
+
     # ---- Add Water Applied per Day rows  ----
     if water_applied_per_event_ml_m2 > 0:
         # Based on irrigation events/day 
@@ -1624,15 +1561,6 @@ if numeric_cols:
                 index=["Water Applied per Day (mL/m²·day)"],
             )
             summary = pd.concat([summary, wapd_row], axis=0)
-
-        # Based on leaf wetness events/day
-        if leafwetness_daily_counts is not None and not leafwetness_daily_counts.empty:
-            wapd_lw = leafwetness_daily_counts.astype(float) * float(water_applied_per_event_ml_m2)
-            wapd_lw_row = pd.DataFrame(
-                {"Min": [float(wapd_lw.min())], "Average": [float(wapd_lw.mean())], "Max": [float(wapd_lw.max())]},
-                index=["Water Applied per Day (mL/m²·day) - Leaf Wetness"],
-            )
-            summary = pd.concat([summary, wapd_lw_row], axis=0)
 
     def label_with_icon(label: str) -> str:
         """
@@ -1693,7 +1621,6 @@ if numeric_cols:
         vpd_label,
         "💡 Light Intensity (PPFD - µmol m⁻² s⁻¹)",
         "🌤️ Daily Light Integral (mol m⁻² d⁻¹)",
-        "🌿 Leaf Wetness",
     ]
 
     # Use irrigation EVENTS rows as the editable mapping rows for Irrigation1..N
@@ -1701,9 +1628,7 @@ if numeric_cols:
 
     # Rows stay present even when not yet available
     desired_rows += [
-        "🚿 Irrigation Events per Day (#) - Leaf Wetness",
         "💧 Water Applied per Day (mL/m²·day)",
-        "💧 Water Applied per Day (mL/m²·day) - Leaf Wetness",
     ]
 
     # Reindex to force all rows to exist; missing ones become NaN -> later display as "-"
@@ -1868,9 +1793,6 @@ if numeric_cols:
         if "Light Intensity" in s:
             return "PAR"
 
-        # raw leaf wetness row is directly mappable
-        if "Leaf Wetness" in s and "Events per Day" not in s and "Water Applied" not in s:
-            return "LeafWetness"
 
         # Use irrigation EVENTS rows as the mapping rows for Irrigation1..N
         m = re.search(r"Irrigation(\d+)\s+Events per Day", s)
@@ -2591,168 +2513,78 @@ if use_time_axis and events_by_zone is not None and not events_by_zone.empty:
             plot_separator()
             figs_for_pdf.append(fig_day)
 
+
 # ----------------------------------------------------------
-# Leaf Wetness + Irrigation Events (Leaf Wetness)
-# This is separate from the existing Irrigation ON/OFF event logic.
+# Irrigation settings (moved from old Settings page)
 # ----------------------------------------------------------
+st.markdown("---")
+st.subheader("Irrigation Settings")
+st.caption(
+    "These settings control how EnDash converts irrigation signal data into ON/OFF states "
+    "and how it calculates water applied per day."
+)
 
-LEAF_WETNESS_YLABEL = {
-    "Percent": "Leaf Wetness (%)",
-    "Volts": "Leaf Wetness (V)",
-    "milliVolts": "Leaf Wetness (mV)",
-}.get(leaf_wetness_unit, "Leaf Wetness")
+with st.form("homepage_irrigation_settings_form", clear_on_submit=False):
+    col_it, col_gap = st.columns(2)
 
-# Choose a "day to plot" for leaf wetness.
-# Priority:
-#   1) user's Day to Graph dropdown (full days only; NOT saved to DB)
-#   2) day_to_plot from irrigation section (if it exists),
-#   3) else the most recent "full day" in the dataset,
-#   4) else the most recent date present.
-day_to_plot_lw = None
+    with col_it:
+        irrigation_trigger_input = st.number_input(
+            "Irrigation Trigger (ON when value ≥ trigger)",
+            value=float(irrigation_trigger),
+            min_value=0.1,
+            step=0.1,
+            format="%.1f",
+            help="Your irrigation column is numeric: 0 = off, values ≥ trigger = on.",
+        )
 
-full_days_lw = []
-if use_time_axis and "Time" in df_display.columns and df_display["Time"].notna().any():
-    full_days_lw = find_full_days(df_display["Time"])  # same helper used for LW full-day bars
+    with col_gap:
+        irrigation_min_interval_input = st.number_input(
+            "Minimum Time Between Irrigation Events (minutes)",
+            value=float(irrigation_min_interval_min),
+            min_value=0.0,
+            step=1.0,
+            format="%.0f",
+            help=(
+                "Prevents counting the same irrigation run multiple times when it spans "
+                "multiple time steps."
+            ),
+        )
 
-# Build dropdown options (strings) for stable widget behavior
-lw_day_options = [pd.to_datetime(d).strftime("%Y-%m-%d") for d in full_days_lw] if full_days_lw else []
-lw_day_key = "dash_leaf_wetness_day_to_graph"
+    water_applied_per_event_ml_m2_input = st.number_input(
+        "Water Applied per Irrigation Event (mL/m²)",
+        min_value=0.0,
+        step=1.0,
+        value=float(water_applied_per_event_ml_m2),
+        format="%.0f",
+        help="Used to calculate Water Applied per Day.",
+    )
 
-# If user has selected a day previously, use it (as long as it is still a valid full day)
-lw_day_selected = st.session_state.get(lw_day_key, None)
-if lw_day_selected in lw_day_options:
-    day_to_plot_lw = pd.to_datetime(lw_day_selected)
+    save_irrig_settings = st.form_submit_button("💾 Save irrigation settings")
 
-# Otherwise fall back to the previous behavior
-if day_to_plot_lw is None:
-    if "day_to_plot" in locals() and day_to_plot is not None:
-        day_to_plot_lw = pd.to_datetime(day_to_plot)
-    elif full_days_lw:
-        day_to_plot_lw = pd.to_datetime(full_days_lw[-1])
-    elif use_time_axis and "Time" in df_display.columns and df_display["Time"].notna().any():
-        day_to_plot_lw = pd.to_datetime(df_display["Time"].max()).normalize()
-
-if use_time_axis and "LeafWetness" in df_display.columns and day_to_plot_lw is not None:
-    df_lw_day = df_display[df_display["Time"].dt.normalize() == day_to_plot_lw.normalize()].copy()
-
-    if not df_lw_day.empty:
-        # --- Day to Graph (auto-updates plot; NOT saved) ---
-        if lw_day_options:
-            if (lw_day_key not in st.session_state) or (st.session_state[lw_day_key] not in lw_day_options):
-                st.session_state[lw_day_key] = lw_day_options[-1]
-
-            st.selectbox(
-                "Day to Graph",
-                options=lw_day_options,
-                key=lw_day_key,
-                help="Select a full day of data to display in the Leaf Wetness (24hr) graph. Not saved to the database.",
-            )
-        else:
-            st.selectbox(
-                "Day to Graph",
-                options=[],
-                disabled=True,
-                key=lw_day_key,
-                help="No full days detected in this dataset.",
-            )
-
-        fig_lw, ax_lw = plt.subplots(figsize=(8, 3))
-
-        ax_lw.plot(df_lw_day["Time"], df_lw_day["LeafWetness"], label="Leaf Wetness")
-
-        # Event points (same timestamps as the computed LW event column)
-        ev_mask = (df_lw_day[LEAF_WETNESS_EVENT_COL] == 1) if LEAF_WETNESS_EVENT_COL in df_lw_day.columns else None
-        if ev_mask is not None and ev_mask.any():
-            ax_lw.scatter(
-                df_lw_day.loc[ev_mask, "Time"],
-                df_lw_day.loc[ev_mask, "LeafWetness"],
-                label="Irrigation Event (Leaf Wetness)",
-                color="tab:orange",
-                zorder=5,
-            )
-
-        ax_lw.set_title(f"Leaf Wetness (24hr) — {day_to_plot_lw.date()}")
-        ax_lw.set_xlabel("Time of day")
-        ax_lw.set_ylabel(LEAF_WETNESS_YLABEL)
-
-        apply_time_axis_formatting(ax_lw, fig_lw, df_lw_day["Time"])
-        legend_below(ax_lw, fig_lw, ncol=2, y=-0.5)
-
-        st.pyplot(fig_lw)
-
-        # ------------------------------------------------------------
-        # Inline Leaf Wetness irrigation detection settings
-        # (Same intent as Settings page; saved per-user to DB and reruns)
-        # ------------------------------------------------------------
-
-        save_lw_settings = False
-
-        with st.form("lw_inline_settings_form", clear_on_submit=False):
-            st.markdown("##### Leaf Wetness Settings")
-            st.caption(
-                "Fine-tune the Leaf Wetness graph above."
-            )
-
-            c1, c2 = st.columns(2)
-            with c1:
-                irrigation_sensitivity_pct_input = st.number_input(
-                    "Irrigation Sensitivity (%)",
-                    value=float(irrigation_sensitivity_pct),
-                    min_value=0.1,
-                    max_value=100.0,
-                    step=0.1,
-                    format="%.2f",
-                    help="If Leaf Wetness increases by at least this amount (percent points), an irrigation event is counted.",
-                    key="dash_irrigation_sensitivity_pct",
-                )
-
-            with c2:
-                lw_min_interval_input = st.number_input(
-                    "Minimum time between irrigation events (min)",
-                    value=float(leaf_wetness_min_interval_min),
-                    min_value=0.0,
-                    step=1.0,
-                    format="%.0f",
-                    help="Minimum minutes between counted irrigation events derived from Leaf Wetness.",
-                    key="dash_leaf_wetness_min_interval_min",
-                )
-            
-            save_lw_settings = st.form_submit_button("💾 Save leaf wetness settings")
-
-        if save_lw_settings:
-            # Updates only leaf wetness detection settings
-            db.update_leaf_wetness_event_settings(
-                user["id"],
-                irrigation_sensitivity_pct=float(irrigation_sensitivity_pct_input),
-                leaf_wetness_min_interval_min=float(lw_min_interval_input),
-            )
-            st.success("Leaf wetness settings saved. Updating dashboard…")
-            st.rerun()
-
-        plot_separator()
-        figs_for_pdf.append(fig_lw)
-
-
-# Bar chart: Irrigation Events (Leaf Wetness) per day across dataset (full days only)
-if leafwetness_daily_counts is not None and len(leafwetness_daily_counts) > 0:
-    fig_lw_bar, ax_lw_bar = plt.subplots(figsize=(8, 3))
-
-    # Match irrigation events/day bar placement: center bars on the day (midday)
-    x_bar = pd.to_datetime(leafwetness_daily_counts.index) + pd.Timedelta(hours=12)
-
-    ax_lw_bar.bar(x_bar, leafwetness_daily_counts.values, width=0.8, align="center")
-    ax_lw_bar.set_title("Irrigation Events per Day (Leaf Wetness) — Full Days Only")
-    ax_lw_bar.set_xlabel("Date")
-    ax_lw_bar.set_ylabel("Events per day")
-
-    # Match the date formatting used elsewhere (MM-DD for multi-day spans)
-    apply_time_axis_formatting(ax_lw_bar, fig_lw_bar, pd.to_datetime(leafwetness_daily_counts.index))
-
-    st.pyplot(fig_lw_bar)
-    plot_separator()
-    figs_for_pdf.append(fig_lw_bar)
-
-
+if save_irrig_settings:
+    db.update_settings(
+        user["id"],
+        orig_temp_unit=orig_temp_unit,
+        orig_light_unit=orig_light_unit,
+        temp_unit=temp_unit,
+        target_low=float(target_temp_low),
+        target_high=float(target_temp_high),
+        target_rh_low=float(target_rh_low),
+        target_rh_high=float(target_rh_high),
+        target_ppfd=float(target_ppfd),
+        target_dli_low=float(target_dli_low),
+        target_dli_high=float(target_dli_high),
+        target_vpd_low=float(target_vpd_low),
+        target_vpd_high=float(target_vpd_high),
+        irrigation_trigger=float(irrigation_trigger_input),
+        irrigation_min_interval_min=float(irrigation_min_interval_input),
+        leaf_wetness_unit=leaf_wetness_unit,
+        irrigation_sensitivity_pct=float(irrigation_sensitivity_pct),
+        leaf_wetness_min_interval_min=float(leaf_wetness_min_interval_min),
+        water_applied_per_event_ml_m2=float(water_applied_per_event_ml_m2_input),
+    )
+    st.success("Irrigation settings saved.")
+    st.rerun()
 
 # =========================
 # Download Dashboard button (replaces old Full Dashboard)

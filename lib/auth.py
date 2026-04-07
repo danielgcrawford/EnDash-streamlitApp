@@ -73,8 +73,8 @@ def render_sidebar():
                 st.page_link("pages/0_Admin.py", label="Admin")
 
             # Other pages for any logged-in user
-            st.page_link("pages/1_Upload.py", label="Data File Settings")
-            st.page_link("pages/2_Settings.py", label="Climate Units & Setpoints")
+            #st.page_link("pages/1_Upload.py", label="Data File Settings")
+            st.page_link("pages/2_Settings.py", label="Leaf Wetness")
             #st.page_link("pages/4_Chatbot.py", label="Data Assistant")
 
 
