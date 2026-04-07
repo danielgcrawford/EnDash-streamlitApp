@@ -843,27 +843,29 @@ if not user:
 
 # ----- Logged-in view -----
 
-# Top-row navigation & actions
-col1, col2, col3 = st.columns(3, gap="medium")
+# # Top-row navigation & actions
+# col1, col2, col3 = st.columns(3, gap="medium")
 
-with col1:
-    if st.button("📂 Data File Settings", width="stretch"):
-        st.switch_page("pages/1_Upload.py")
+# with col1:
+#     if st.button("📂 Data File Settings", width="stretch"):
+#         st.switch_page("pages/1_Upload.py")
 
-with col2:
-    if st.button("⚙️ Climate Units & Setpoints", width="stretch"):
-        st.switch_page("pages/2_Settings.py")
+# with col2:
+#     if st.button("⚙️ Climate Units & Setpoints", width="stretch"):
+#         st.switch_page("pages/2_Settings.py")
 
-with col3:
-    download_slot = st.empty()
+# with col3:
+#     download_slot = st.empty()
 
 # ----- Quick Upload panel (always visible) -----
-left_col, right_col = st.columns(2, gap="medium")
+logo_col, left_col, mid_col, right_col = st.columns([1.0, 1.15, 1.15, 0.8], gap="medium")
 
+with logo_col:
+    st.image("assets/EnDash_Logo_V2.png", use_container_width=True)
 
 with left_col:
     #st.markdown("### New File Upload")
-    st.subheader("New File Upload", help="Upload a file to add it to your dashboard.")
+    #st.subheader("New File Upload", help="Upload a file to add it to your dashboard.")
     #st.caption()
 
     #Functions added to accept variable row of column headings and separate Date/Time
@@ -907,7 +909,7 @@ with left_col:
         return df_preview, delim
 
     quick_file = st.file_uploader(
-        "File upload (.csv, .xlsx, .xls, .xlsm)",
+        "Upload a new file)",
         type=["csv", "xlsx", "xls", "xlsm"],
         key="quick_upload_file",
         #help="Drop a data file here to add it to your dashboard.",
@@ -1043,9 +1045,9 @@ with left_col:
     if upload_succeeded:
         st.rerun()
 
-with right_col:
+with mid_col:
     # ----- File selection (Next to Quick Upload) -----
-    st.subheader("Current File Selection", help="Select a stored file to view.")
+    #st.subheader("Current File Selection", help="Select a stored file to view.")
 
     files = db.list_user_files(user["id"])
     if not files:
@@ -1073,7 +1075,7 @@ with right_col:
         st.session_state.home_selected_file_id = default_id
 
     selected_file_id = st.selectbox(
-        "Select a data file to view",
+        "Current file selection",
         file_ids,
         format_func=_home_file_label,
         key="home_selected_file_id",
@@ -1086,6 +1088,107 @@ with right_col:
 
     rec = id_to_rec[int(selected_file_id)]
     st.session_state["selected_file_id"] = int(selected_file_id) 
+
+
+with right_col:
+    #st.subheader("Units", help="Set file units and dashboard temperature display.")
+
+    # Load current settings for units
+    units_row = db.get_or_create_settings(user["id"])
+    units_settings = dict(units_row) if units_row is not None else {}
+
+    current_orig_temp_unit = units_settings.get("orig_temp_unit", "C")
+    current_orig_light_unit = units_settings.get("orig_light_unit", "PPFD")
+    current_leaf_wetness_unit = units_settings.get("leaf_wetness_unit", "Percent")
+    current_dashboard_temp_unit = units_settings.get("temp_unit", "F")
+
+    TEMP_UNIT_OPTIONS = {
+        "Celsius (°C)": "C",
+        "Fahrenheit (°F)": "F",
+    }
+
+    LIGHT_UNIT_OPTIONS = {
+        "PPFD (µmol m⁻² s⁻¹)": "PPFD",
+        "Lux": "LUX",
+        "Kilolux (klux)": "KLUX",
+        "Footcandles (fc)": "FC",
+        "W m⁻²": "W_M2",
+    }
+
+    LEAF_WETNESS_OPTIONS = ["Percent", "Volts", "milliVolts"]
+
+    def _temp_unit_index(current_code: str) -> int:
+        labels = list(TEMP_UNIT_OPTIONS.keys())
+        for i, lbl in enumerate(labels):
+            if TEMP_UNIT_OPTIONS[lbl] == current_code:
+                return i
+        return 0
+
+    def _light_unit_index(current_code: str) -> int:
+        labels = list(LIGHT_UNIT_OPTIONS.keys())
+        for i, lbl in enumerate(labels):
+            if LIGHT_UNIT_OPTIONS[lbl] == current_code:
+                return i
+        return 0
+
+    if current_leaf_wetness_unit not in LEAF_WETNESS_OPTIONS:
+        current_leaf_wetness_unit = "Percent"
+
+    with st.expander("Edit units", expanded=False):
+        with st.form("home_units_form", clear_on_submit=False):
+            orig_temp_choice = st.selectbox(
+                "Original Temperature",
+                options=list(TEMP_UNIT_OPTIONS.keys()),
+                index=_temp_unit_index(current_orig_temp_unit),
+            )
+
+            orig_light_choice = st.selectbox(
+                "Original Light",
+                options=list(LIGHT_UNIT_OPTIONS.keys()),
+                index=_light_unit_index(current_orig_light_unit),
+            )
+
+            leaf_wetness_choice = st.selectbox(
+                "Leaf Wetness",
+                options=LEAF_WETNESS_OPTIONS,
+                index=LEAF_WETNESS_OPTIONS.index(current_leaf_wetness_unit),
+            )
+
+            dashboard_temp_choice = st.selectbox(
+                "Dashboard Temperature",
+                options=list(TEMP_UNIT_OPTIONS.keys()),
+                index=_temp_unit_index(current_dashboard_temp_unit),
+            )
+
+            save_units = st.form_submit_button("Save Units", use_container_width=True)
+
+        if save_units:
+            # keep existing non-unit settings unchanged
+            db.update_settings(
+                user["id"],
+                orig_temp_unit=TEMP_UNIT_OPTIONS[orig_temp_choice],
+                orig_light_unit=LIGHT_UNIT_OPTIONS[orig_light_choice],
+                temp_unit=TEMP_UNIT_OPTIONS[dashboard_temp_choice],
+                target_low=float(units_settings.get("target_low", 65.0)),
+                target_high=float(units_settings.get("target_high", 80.0)),
+                target_rh_low=float(units_settings.get("target_rh_low", 70.0)),
+                target_rh_high=float(units_settings.get("target_rh_high", 95.0)),
+                target_ppfd=float(units_settings.get("target_ppfd", 150.0)),
+                target_dli_low=float(units_settings.get("target_dli_low", 8.0)),
+                target_dli_high=float(units_settings.get("target_dli_high", 12.0)),
+                target_vpd_low=float(units_settings.get("target_vpd_low", 0.2)),
+                target_vpd_high=float(units_settings.get("target_vpd_high", 0.8)),
+                irrigation_trigger=float(units_settings.get("irrigation_trigger", 1.0)),
+                irrigation_min_interval_min=float(units_settings.get("irrigation_min_interval_min", 7.0)),
+                leaf_wetness_unit=leaf_wetness_choice,
+                irrigation_sensitivity_pct=float(units_settings.get("irrigation_sensitivity_pct", 3.0)),
+                leaf_wetness_min_interval_min=float(units_settings.get("leaf_wetness_min_interval_min", 7.0)),
+                water_applied_per_event_ml_m2=float(units_settings.get("water_applied_per_event_ml_m2", 10.0)),
+            )
+            st.rerun()
+    
+    #Download Dashboard button
+    download_slot = st.empty()
 
 st.markdown("---")
 
