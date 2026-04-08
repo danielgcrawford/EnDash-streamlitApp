@@ -909,7 +909,7 @@ with left_col:
         return df_preview, delim
 
     quick_file = st.file_uploader(
-        "Upload a new file)",
+        "Upload a new file:",
         type=["csv", "xlsx", "xls", "xlsm"],
         key="quick_upload_file",
         #help="Drop a data file here to add it to your dashboard.",
@@ -1075,7 +1075,7 @@ with mid_col:
         st.session_state.home_selected_file_id = default_id
 
     selected_file_id = st.selectbox(
-        "Current file selection",
+        "Select a stored file to view:",
         file_ids,
         format_func=_home_file_label,
         key="home_selected_file_id",
@@ -1324,8 +1324,8 @@ if "Time" in df_display.columns and df_display["Time"].notna().any():
     interval_str = format_timedelta(interval_td) if interval_td is not None else "unknown"
     st.subheader(
         f"Data Summary from "
-        f"**{start_time.strftime('%Y-%m-%d %H:%M:%S')}** "
-        f"to **{end_time.strftime('%Y-%m-%d %H:%M:%S')}** "
+        f"**{start_time.strftime('%Y-%m-%d %H:%M')}** "
+        f"to **{end_time.strftime('%Y-%m-%d %H:%M')}** "
         f" - Interval: **{interval_str}**",
         help="Upload a new file or select a stored file to view your data summary."
     )
@@ -1537,18 +1537,17 @@ if numeric_cols:
 
     # ---- Add irrigation events/day rows (PER ZONE, full days only) ----
     if events_by_zone is not None and not events_by_zone.empty:
-        for col in events_by_zone.columns:
-            s = events_by_zone[col].astype(float)
+        s = events_total.astype(float)
 
-            irrig_row = pd.DataFrame(
-                {
-                    "Min": [float(s.min())],
-                    "Average": [float(s.mean())],
-                    "Max": [float(s.max())],
-                },
-                index=[f"{col} Events per Day (#)"],
-            )
-            summary = pd.concat([summary, irrig_row], axis=0)
+        irrig_row = pd.DataFrame(
+            {
+                "Min": [float(s.min())],
+                "Average": [float(s.mean())],
+                "Max": [float(s.max())],
+            },
+            index=["Events per Day (#)"],
+        )
+        summary = pd.concat([summary, irrig_row], axis=0)
 
 
     # ---- Add Water Applied per Day rows  ----
@@ -1792,19 +1791,13 @@ if numeric_cols:
             return "RH"
         if "Light Intensity" in s:
             return "PAR"
-
-
-        # Use irrigation EVENTS rows as the mapping rows for Irrigation1..N
-        m = re.search(r"Irrigation(\d+)\s+Events per Day", s)
-        if m:
-            return f"Irrigation{m.group(1)}"
+        if "Irrigation Events" in s:
+            return "Irrigation1"
 
         # derived-only rows: no direct mapping
         if "Vapor Pressure Deficit" in s:
             return None
         if "Daily Light Integral" in s:
-            return None
-        if "Irrigation Events per Day (#) - Leaf Wetness" in s:
             return None
         if "Water Applied" in s:
             return None
@@ -1863,27 +1856,93 @@ if numeric_cols:
 
         return "none"
 
+    def _normalize_summary_editor_df(df_in: pd.DataFrame) -> pd.DataFrame:
+        """
+        Normalize the editable summary table into a stable form so we can compare
+        whether the user actually changed anything.
+        """
+        df2 = df_in.copy()
+
+        # Treat blanks consistently
+        for col in ["Data Column", "Metric"]:
+            if col in df2.columns:
+                df2[col] = df2[col].astype(str).fillna("")
+
+        for col in ["Low Target", "High Target"]:
+            if col in df2.columns:
+                df2[col] = df2[col].apply(_safe_float)
+
+        # Keep row order stable
+        return df2.reset_index(drop=True)
+
+
+    def _summary_editor_signature(df_in: pd.DataFrame) -> str:
+        """
+        Convert the editable summary table into a stable JSON string so that
+        Streamlit reruns do not trigger unnecessary DB writes.
+        """
+        df2 = _normalize_summary_editor_df(df_in)
+
+        return df2.to_json(
+            orient="records",
+            date_format="iso",
+            default_handler=str,
+        )
+
     #raw_options = [LOCKED_DATA_COLUMN] + [str(c) for c in raw_cols_for_dropdown]
     raw_options = [UNMAPPED_DATA_COLUMN] + list(token_to_raw.keys())
 
-    editor_rows = []
-    for row_label in summary_display.index:
-        low_t, high_t = _target_pair_for_row(row_label)
+    INPUT_SEPARATOR_LABEL = "──── Input Metrics ────"
+    CALC_SEPARATOR_LABEL = "──── Calculated Metrics ────"
 
-        editor_rows.append({
-            "Metric": row_label,
-            "Data Column": _summary_row_data_column(row_label),
-            "Low Target": low_t,
-            "High Target": high_t,
-            "Min": summary_display.at[row_label, "Min"],
-            "Average": summary_display.at[row_label, "Average"],
-            "Max": summary_display.at[row_label, "Max"],
-        })
+    temp_symbol = "°F" if temp_unit == "F" else "°C"
+
+    # Pick whichever VPD row exists
+    vpd_candidates = [idx for idx in summary_display.index if "Vapor Pressure Deficit" in str(idx)]
+    vpd_label = vpd_candidates[0] if vpd_candidates else "🍃 Leaf Vapor Pressure Deficit (kPa)"
+
+    ordered_editor_rows = [
+        INPUT_SEPARATOR_LABEL,
+        f"🌡️ Air Temperature ({temp_symbol})",
+        f"🍂 Leaf Temperature ({temp_symbol})",
+        "💦 Relative Humidity (%)",
+        "💡 Light Intensity (PPFD - µmol m⁻² s⁻¹)",
+        "🚿 Irrigation Events per Day (#)",
+        CALC_SEPARATOR_LABEL,
+        vpd_label,
+        "🌤️ Daily Light Integral (mol m⁻² d⁻¹)",
+        "💧 Water Applied per Day (mL/m²·day)",
+    ]
+
+    editor_rows = []
+    for row_label in ordered_editor_rows:
+        if row_label in [INPUT_SEPARATOR_LABEL, CALC_SEPARATOR_LABEL]:
+            editor_rows.append({
+                "Metric": row_label,
+                "Data Column": LOCKED_DATA_COLUMN,
+                "Minimum": "",
+                "Average": "",
+                "Maximum": "",
+                "Low Target": None,
+                "High Target": None,
+            })
+        else:
+            low_t, high_t = _target_pair_for_row(row_label)
+
+            editor_rows.append({
+                "Metric": row_label,
+                "Data Column": _summary_row_data_column(row_label),
+                "Minimum": summary_display.at[row_label, "Min"] if row_label in summary_display.index else "-",
+                "Average": summary_display.at[row_label, "Average"] if row_label in summary_display.index else "-",
+                "Maximum": summary_display.at[row_label, "Max"] if row_label in summary_display.index else "-",
+                "Low Target": low_t,
+                "High Target": high_t,
+            })
 
     summary_editor_df = pd.DataFrame(editor_rows)
 
+
     # ---------- Build a style DataFrame for the editor ----------
-    # Color styling on the read-only output columns.
     editor_style_df = pd.DataFrame(
         "",
         index=summary_editor_df.index,
@@ -1893,15 +1952,18 @@ if numeric_cols:
     # Reuse existing summary color logic
     metric_style_df = build_style_df(summary_display, summary_numeric)
 
-    # Copy only Min / Average / Max colors from the old summary styling
+    # Copy color styling from old summary table columns into new editor columns
     for i, metric_label in summary_editor_df["Metric"].items():
         if metric_label in metric_style_df.index:
-            for col in ["Min", "Average", "Max"]:
-                if col in metric_style_df.columns:
-                    editor_style_df.at[i, col] = metric_style_df.at[metric_label, col]
+            if "Min" in metric_style_df.columns and "Minimum" in editor_style_df.columns:
+                editor_style_df.at[i, "Minimum"] = metric_style_df.at[metric_label, "Min"]
+            if "Average" in metric_style_df.columns and "Average" in editor_style_df.columns:
+                editor_style_df.at[i, "Average"] = metric_style_df.at[metric_label, "Average"]
+            if "Max" in metric_style_df.columns and "Maximum" in editor_style_df.columns:
+                editor_style_df.at[i, "Maximum"] = metric_style_df.at[metric_label, "Max"]
 
-    # Optional: keep Data Column / targets neutral
-    for col in ["Data Column", "Low Target", "High Target", "Metric"]:
+    # Keep non-output columns neutral
+    for col in ["Metric", "Data Column", "Low Target", "High Target"]:
         if col in editor_style_df.columns:
             editor_style_df[col] = ""
 
@@ -1910,16 +1972,14 @@ if numeric_cols:
         summary_editor_df.style
         .apply(lambda _: editor_style_df, axis=None)
         .set_properties(
-            subset=["Min", "Average", "Max"],
-            **{"text-align":"right"}
+            subset=["Minimum", "Average", "Maximum"],
+            **{"text-align": "right"}
         )
         .format(
             {
-                #"Low Target": lambda x: "-" if pd.isna(x) else f"{float(x):.2f}",
-                #"High Target": lambda x: "-" if pd.isna(x) else f"{float(x):.2f}",
-                "Min": lambda x: "-" if pd.isna(x) or x == "" else str(x),
+                "Minimum": lambda x: "-" if pd.isna(x) or x == "" else str(x),
                 "Average": lambda x: "-" if pd.isna(x) or x == "" else str(x),
-                "Max": lambda x: "-" if pd.isna(x) or x == "" else str(x),
+                "Maximum": lambda x: "-" if pd.isna(x) or x == "" else str(x),
             }
         )
     )
@@ -1940,6 +2000,9 @@ if numeric_cols:
                 help="Select which file column should map to this metric for this file. Rows showing '-' are calculated values and cannot be mapped.",
                 width="small",
             ),
+            "Minimum": st.column_config.TextColumn("Minimum", disabled=True, width="small"),
+            "Average": st.column_config.TextColumn("Average", disabled=True, width="small"),
+            "Maximum": st.column_config.TextColumn("Maximum", disabled=True, width="small"),
             "Low Target": st.column_config.NumberColumn(
                 "Low Target",
                 required=False,
@@ -1952,11 +2015,8 @@ if numeric_cols:
                 format="%.2f",
                 width="small",
             ),
-            "Min": st.column_config.TextColumn("Min", disabled=True, width="small"),
-            "Average": st.column_config.TextColumn("Average", disabled=True, width="small"),
-            "Max": st.column_config.TextColumn("Max", disabled=True, width="small"),
         },
-        disabled=["Metric", "Min", "Average", "Max"],
+        disabled=["Metric", "Minimum", "Average", "Maximum"],
     )    
 
     for i, row in edited_summary.iterrows():
@@ -1979,13 +2039,15 @@ if numeric_cols:
         elif target_mode == "high_only":
             edited_summary.at[i, "Low Target"] = None
     
-    save_cols = st.columns([1, 5])
-    with save_cols[0]:
-        save_summary_table = st.button("Save", type="primary", key=f"save_summary_table_{int(rec['id'])}")
-    with save_cols[1]:
-        st.caption("Save to update setpoints and this file's column naming, and refresh the dashboard.")
+    # ---------- AUTO-SAVE summary table ----------
+    summary_sig_key = f"home_summary_editor_sig_{int(rec['id'])}"
+    current_summary_sig = _summary_editor_signature(edited_summary)
+    prev_summary_sig = st.session_state.get(summary_sig_key)
 
-    if save_summary_table:
+    if prev_summary_sig is None:
+        # First render for this file: initialize only, do not write yet
+        st.session_state[summary_sig_key] = current_summary_sig
+    elif current_summary_sig != prev_summary_sig:
         # -------- 1) Save targets to settings --------
         def _row_by_contains(txt: str):
             m = edited_summary[edited_summary["Metric"].astype(str).str.contains(txt, regex=False)]
@@ -2036,7 +2098,10 @@ if numeric_cols:
         # -------- 3) Regenerate cleaned file bytes from raw upload --------
         raw_obj = db.get_raw_file_bytes(int(rec["id"]))
         if raw_obj is None:
-            st.error("This file does not have raw upload bytes saved, so the cleaned file cannot be regenerated. Re-upload the original file once to enable summary-table mapping edits.")
+            st.error(
+                "This file does not have raw upload bytes saved, so the cleaned file cannot be regenerated. "
+                "Re-upload the original file once to enable automatic summary-table updates."
+            )
             st.stop()
 
         raw_filename = raw_obj["raw_filename"]
@@ -2049,15 +2114,17 @@ if numeric_cols:
         required_for_dashboard = ["Time", "AirTemp", "RH"]
         missing = [c for c in required_for_dashboard if c not in df_clean2.columns]
         if missing:
-            st.error(
-                "Cannot apply this mapping because the cleaned dashboard file would be missing required columns: "
+            st.warning(
+                "Table changes were not applied because the dashboard file would be missing required columns: "
                 + ", ".join(missing)
             )
+            st.session_state[summary_sig_key] = current_summary_sig
             st.stop()
 
         cleaned_bytes2 = df_clean2.to_csv(index=False).encode("utf-8")
         db.update_file_content(int(rec["id"]), cleaned_bytes2)
 
+        st.session_state[summary_sig_key] = current_summary_sig
         st.rerun()
 
 else:
