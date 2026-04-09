@@ -769,7 +769,7 @@ st.markdown("""
     table th:nth-child(2), table td:nth-child(2),
     table th:nth-child(3), table td:nth-child(3),
     table th:nth-child(4), table td:nth-child(4),
-    table th:nth-chile(5), table td:nth-child(5) {
+    table th:nth-child(5), table td:nth-child(5) {
     width: 14% !important;
     }
     </style>
