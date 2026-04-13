@@ -1143,7 +1143,7 @@ with right_col:
             )
 
             orig_light_choice = st.selectbox(
-                "Original Light",
+                "Data File Light",
                 options=list(LIGHT_UNIT_OPTIONS.keys()),
                 index=_light_unit_index(current_orig_light_unit),
             )
