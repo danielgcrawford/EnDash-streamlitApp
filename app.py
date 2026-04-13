@@ -1137,7 +1137,7 @@ with right_col:
     with st.expander("Edit units", expanded=False):
         with st.form("home_units_form", clear_on_submit=False):
             orig_temp_choice = st.selectbox(
-                "Original Temperature",
+                "Data File Temperature",
                 options=list(TEMP_UNIT_OPTIONS.keys()),
                 index=_temp_unit_index(current_orig_temp_unit),
             )
@@ -1146,12 +1146,6 @@ with right_col:
                 "Original Light",
                 options=list(LIGHT_UNIT_OPTIONS.keys()),
                 index=_light_unit_index(current_orig_light_unit),
-            )
-
-            leaf_wetness_choice = st.selectbox(
-                "Leaf Wetness",
-                options=LEAF_WETNESS_OPTIONS,
-                index=LEAF_WETNESS_OPTIONS.index(current_leaf_wetness_unit),
             )
 
             dashboard_temp_choice = st.selectbox(
@@ -1180,7 +1174,7 @@ with right_col:
                 target_vpd_high=float(units_settings.get("target_vpd_high", 0.8)),
                 irrigation_trigger=float(units_settings.get("irrigation_trigger", 1.0)),
                 irrigation_min_interval_min=float(units_settings.get("irrigation_min_interval_min", 7.0)),
-                leaf_wetness_unit=leaf_wetness_choice,
+                #leaf_wetness_unit=leaf_wetness_choice,
                 irrigation_sensitivity_pct=float(units_settings.get("irrigation_sensitivity_pct", 3.0)),
                 leaf_wetness_min_interval_min=float(units_settings.get("leaf_wetness_min_interval_min", 7.0)),
                 water_applied_per_event_ml_m2=float(units_settings.get("water_applied_per_event_ml_m2", 10.0)),
@@ -1991,14 +1985,14 @@ if numeric_cols:
         #height="content",
         key=f"home_summary_editor_{int(rec['id'])}",
         column_config={
-            "Metric": st.column_config.TextColumn("Metric", disabled=True, width="medium"),
+            "Metric": st.column_config.TextColumn("Metric", disabled=True, width="large"),
             "Data Column": st.column_config.SelectboxColumn(
                 "Data",
                 options=raw_options,
                 required=False,
                 format_func=_format_data_column_option,
                 help="Select which file column should map to this metric for this file. Rows showing '-' are calculated values and cannot be mapped.",
-                width="small",
+                width="large",
             ),
             "Minimum": st.column_config.TextColumn("Minimum", disabled=True, width="small"),
             "Average": st.column_config.TextColumn("Average", disabled=True, width="small"),
@@ -2006,13 +2000,13 @@ if numeric_cols:
             "Low Target": st.column_config.NumberColumn(
                 "Low Target",
                 required=False,
-                format="%.2f",
+                format="%.1f",
                 width="small",
             ),
             "High Target": st.column_config.NumberColumn(
                 "High Target",
                 required=False,
-                format="%.2f",
+                format="%.1f",
                 width="small",
             ),
         },
@@ -2498,6 +2492,79 @@ for col in numeric_cols_no_par:
     figs_for_pdf.append(fig)
 
 # ----------------------------------------------------------
+# Irrigation settings (moved from old Settings page)
+# ----------------------------------------------------------
+st.markdown("---")
+st.subheader("Irrigation Settings")
+st.caption(
+    "These settings control how EnDash converts irrigation signal data into ON/OFF states "
+    "and how it calculates water applied per day."
+)
+
+with st.form("homepage_irrigation_settings_form", clear_on_submit=False):
+    col_it, col_gap = st.columns(2)
+
+    with col_it:
+        irrigation_trigger_input = st.number_input(
+            "Irrigation Trigger (ON when value ≥ trigger)",
+            value=float(irrigation_trigger),
+            min_value=0.1,
+            step=0.1,
+            format="%.1f",
+            help="Your irrigation column is numeric: 0 = off, values ≥ trigger = on.",
+        )
+
+    with col_gap:
+        irrigation_min_interval_input = st.number_input(
+            "Minimum Time Between Irrigation Events (minutes)",
+            value=float(irrigation_min_interval_min),
+            min_value=0.0,
+            step=1.0,
+            format="%.0f",
+            help=(
+                "Prevents counting the same irrigation run multiple times when it spans "
+                "multiple time steps."
+            ),
+        )
+
+    water_applied_per_event_ml_m2_input = st.number_input(
+        "Water Applied per Irrigation Event (mL/m²)",
+        min_value=0.0,
+        step=1.0,
+        value=float(water_applied_per_event_ml_m2),
+        format="%.0f",
+        help="Used to calculate Water Applied per Day.",
+    )
+
+    save_irrig_settings = st.form_submit_button("💾 Save irrigation settings")
+
+if save_irrig_settings:
+    db.update_settings(
+        user["id"],
+        orig_temp_unit=orig_temp_unit,
+        orig_light_unit=orig_light_unit,
+        temp_unit=temp_unit,
+        target_low=float(target_temp_low),
+        target_high=float(target_temp_high),
+        target_rh_low=float(target_rh_low),
+        target_rh_high=float(target_rh_high),
+        target_ppfd=float(target_ppfd),
+        target_dli_low=float(target_dli_low),
+        target_dli_high=float(target_dli_high),
+        target_vpd_low=float(target_vpd_low),
+        target_vpd_high=float(target_vpd_high),
+        irrigation_trigger=float(irrigation_trigger_input),
+        irrigation_min_interval_min=float(irrigation_min_interval_input),
+        leaf_wetness_unit=leaf_wetness_unit,
+        irrigation_sensitivity_pct=float(irrigation_sensitivity_pct),
+        leaf_wetness_min_interval_min=float(leaf_wetness_min_interval_min),
+        water_applied_per_event_ml_m2=float(water_applied_per_event_ml_m2_input),
+    )
+    st.success("Irrigation settings saved.")
+    st.rerun()
+
+    
+# ----------------------------------------------------------
 # Irrigation plots (PER ZONE)
 # ----------------------------------------------------------
 if use_time_axis and events_by_zone is not None and not events_by_zone.empty:
@@ -2581,77 +2648,6 @@ if use_time_axis and events_by_zone is not None and not events_by_zone.empty:
             figs_for_pdf.append(fig_day)
 
 
-# ----------------------------------------------------------
-# Irrigation settings (moved from old Settings page)
-# ----------------------------------------------------------
-st.markdown("---")
-st.subheader("Irrigation Settings")
-st.caption(
-    "These settings control how EnDash converts irrigation signal data into ON/OFF states "
-    "and how it calculates water applied per day."
-)
-
-with st.form("homepage_irrigation_settings_form", clear_on_submit=False):
-    col_it, col_gap = st.columns(2)
-
-    with col_it:
-        irrigation_trigger_input = st.number_input(
-            "Irrigation Trigger (ON when value ≥ trigger)",
-            value=float(irrigation_trigger),
-            min_value=0.1,
-            step=0.1,
-            format="%.1f",
-            help="Your irrigation column is numeric: 0 = off, values ≥ trigger = on.",
-        )
-
-    with col_gap:
-        irrigation_min_interval_input = st.number_input(
-            "Minimum Time Between Irrigation Events (minutes)",
-            value=float(irrigation_min_interval_min),
-            min_value=0.0,
-            step=1.0,
-            format="%.0f",
-            help=(
-                "Prevents counting the same irrigation run multiple times when it spans "
-                "multiple time steps."
-            ),
-        )
-
-    water_applied_per_event_ml_m2_input = st.number_input(
-        "Water Applied per Irrigation Event (mL/m²)",
-        min_value=0.0,
-        step=1.0,
-        value=float(water_applied_per_event_ml_m2),
-        format="%.0f",
-        help="Used to calculate Water Applied per Day.",
-    )
-
-    save_irrig_settings = st.form_submit_button("💾 Save irrigation settings")
-
-if save_irrig_settings:
-    db.update_settings(
-        user["id"],
-        orig_temp_unit=orig_temp_unit,
-        orig_light_unit=orig_light_unit,
-        temp_unit=temp_unit,
-        target_low=float(target_temp_low),
-        target_high=float(target_temp_high),
-        target_rh_low=float(target_rh_low),
-        target_rh_high=float(target_rh_high),
-        target_ppfd=float(target_ppfd),
-        target_dli_low=float(target_dli_low),
-        target_dli_high=float(target_dli_high),
-        target_vpd_low=float(target_vpd_low),
-        target_vpd_high=float(target_vpd_high),
-        irrigation_trigger=float(irrigation_trigger_input),
-        irrigation_min_interval_min=float(irrigation_min_interval_input),
-        leaf_wetness_unit=leaf_wetness_unit,
-        irrigation_sensitivity_pct=float(irrigation_sensitivity_pct),
-        leaf_wetness_min_interval_min=float(leaf_wetness_min_interval_min),
-        water_applied_per_event_ml_m2=float(water_applied_per_event_ml_m2_input),
-    )
-    st.success("Irrigation settings saved.")
-    st.rerun()
 
 # =========================
 # Download Dashboard button (replaces old Full Dashboard)
@@ -2665,9 +2661,9 @@ if figs_for_pdf:
 
     # Put the download button in the TOP-RIGHT slot (replacing the old page button)
     download_slot.download_button(
-        label="⬇️ Download Dashboard",
+        label="⬇️ Download Report",
         data=pdf_buffer,
-        file_name=f"endash_dashboard_{Path(filename).stem}.pdf",
+        file_name=f"endash_{Path(filename).stem}.pdf",
         mime="application/pdf",
         width="stretch",
     )
@@ -2676,7 +2672,7 @@ if figs_for_pdf:
     for fig in figs_for_pdf:
         plt.close(fig)
 else:
-    download_slot.button("⬇️ Download Dashboard", disabled=True, width="stretch")
+    download_slot.button("⬇️ Download Report", disabled=True, width="stretch")
 
 st.markdown("---")
 st.caption("Courtesy of the Fisher Lab - IFAS, University of Florida")
