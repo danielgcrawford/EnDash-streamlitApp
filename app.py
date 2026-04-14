@@ -1174,7 +1174,7 @@ with right_col:
                 target_vpd_high=float(units_settings.get("target_vpd_high", 0.8)),
                 irrigation_trigger=float(units_settings.get("irrigation_trigger", 1.0)),
                 irrigation_min_interval_min=float(units_settings.get("irrigation_min_interval_min", 7.0)),
-                #leaf_wetness_unit=leaf_wetness_choice,
+                leaf_wetness_unit=leaf_wetness_choice,
                 irrigation_sensitivity_pct=float(units_settings.get("irrigation_sensitivity_pct", 3.0)),
                 leaf_wetness_min_interval_min=float(units_settings.get("leaf_wetness_min_interval_min", 7.0)),
                 water_applied_per_event_ml_m2=float(units_settings.get("water_applied_per_event_ml_m2", 10.0)),
@@ -2163,22 +2163,46 @@ ax_cover.text(0.07, 0.58, f"VPD band: {target_vpd_low:.2f} to {target_vpd_high:.
 figs_for_pdf.append(fig_cover)
 
 # --- Summary-table page in PDF ---
+def _pdf_ellipsis(text, max_chars: int) -> str:
+    """
+    Truncate long PDF table cell text so it stays inside the column.
+    """
+    s = "" if text is None else str(text)
+    if len(s) <= max_chars:
+        return s
+    return s[: max(0, max_chars - 3)] + "..."
+
+
+def _pdf_fmt_value(val, decimals: int | None = None) -> str:
+    """
+    Formatter for PDF table cells.
+    """
+    if val is None:
+        return "-"
+    s = str(val).strip()
+    if s == "" or s.lower() == "none" or s == "nan":
+        return "-"
+    if decimals is not None:
+        try:
+            return f"{float(val):.{decimals}f}"
+        except Exception:
+            return s
+    return s
+
+
+# --- Summary-table page in PDF ---
 if summary is not None:
-    fig_summary, ax_summary = plt.subplots(figsize=(8.5, 4.5))
+    fig_summary, ax_summary = plt.subplots(figsize=(11.5, 5.3))
     ax_summary.axis("off")
 
-    title_text = "Summary statistics"
-    if start_time is not None and end_time is not None:
-        t_text = f"Data from {start_time} to {end_time}"
-        if interval_td is not None:
-            t_text += f" | Interval: {format_timedelta(interval_td)}"
-        title_text = f"{title_text}\n{t_text}"
-
-    #ax_summary.set_title(title_text, fontsize=10, pad=20)
-
-    # Strip emojis for PDF to avoid glyph warnings
     def _strip_non_ascii(s: str) -> str:
         return s.encode("ascii", errors="ignore").decode("ascii").strip()
+
+    def _pdf_ellipsis(text, max_chars: int) -> str:
+        s = "" if text is None else str(text)
+        if len(s) <= max_chars:
+            return s
+        return s[: max(0, max_chars - 3)] + "..."
 
     # Build a PDF display frame that also includes the saved Data Column selections
     summary_pdf_display = summary_display.copy()
@@ -2192,17 +2216,50 @@ if summary is not None:
     summary_pdf_display.insert(0, "Data Column", pdf_data_cols)
     summary_pdf_numeric.insert(0, "Data Column", np.nan)
 
-    # Strip emojis for PDF rendering only
-    summary_pdf_display_render = summary_pdf_display.copy()
-    summary_pdf_display_render.index = [_strip_non_ascii(str(x)) for x in summary_pdf_display_render.index]
-
     # Build color style table from the unstripped version
     style_df_pdf = build_style_df(summary_pdf_display, summary_pdf_numeric)
 
+    # ---- Force PDF column order to match website table ----
+    pdf_col_labels = [
+        "Metric",
+        "Data Column",
+        "Min",
+        "Average",
+        "Max",
+        "Low Target",
+        "High Target",
+    ]
+
+    pdf_rows = []
+    pdf_row_keys = []
+
+    for row_label in summary_pdf_display.index:
+        metric_text = _strip_non_ascii(str(row_label))
+
+        # Keep metric fully shown as much as possible
+        metric_text = _pdf_ellipsis(metric_text, 42)
+
+        data_text = summary_pdf_display.at[row_label, "Data Column"]
+        data_text = _pdf_ellipsis(data_text, 28)
+
+        pdf_rows.append([
+            metric_text,
+            data_text,
+            summary_pdf_display.at[row_label, "Min"],
+            summary_pdf_display.at[row_label, "Average"],
+            summary_pdf_display.at[row_label, "Max"],
+            summary_pdf_display.at[row_label, "Low Target"],
+            summary_pdf_display.at[row_label, "High Target"],
+        ])
+        pdf_row_keys.append(row_label)
+
+    # Wider Metric column, moderate Data column, slimmer numeric columns
+    col_widths = [0.34, 0.25, 0.11, 0.11, 0.11, 0.13, 0.13]
+
     tbl = ax_summary.table(
-        cellText=summary_pdf_display_render.values,
-        rowLabels=summary_pdf_display_render.index,
-        colLabels=summary_pdf_display.columns,
+        cellText=pdf_rows,
+        colLabels=pdf_col_labels,
+        colWidths=col_widths,
         loc="center",
         cellLoc="center",
         colLoc="center",
@@ -2210,29 +2267,49 @@ if summary is not None:
 
     tbl.auto_set_font_size(False)
     tbl.set_fontsize(9)
-    tbl.scale(1.0, 1.35)
+    tbl.scale(1.0, 1.55)
 
-    # Apply per-cell styling: center + colors + bold header
-    # Matplotlib indexing: header row is r=0; row labels are in column c=-1
+    header_bg = "#F1F3F5"
+    body_bg = "#FFFFFF"
+    edge_color = "#D0D0D0"
+
     for (r, c), cell in tbl.get_celld().items():
-        cell.get_text().set_ha("center")
-        cell.get_text().set_va("center")
+        cell.set_edgecolor(edge_color)
+        cell.set_linewidth(0.8)
 
-        # Header row
         if r == 0:
+            cell.set_facecolor(header_bg)
             cell.get_text().set_weight("bold")
             cell.get_text().set_fontsize(10)
+            cell.get_text().set_color("black")
+            continue
 
-        # Row label column (the left-most label column)
-        if c == -1:
+        cell.set_facecolor(body_bg)
+
+        row_label_original = pdf_row_keys[r - 1]
+
+        # Metric column: left align, slightly less bold so long labels fit better
+        if c == 0:
             cell.get_text().set_ha("left")
-            cell.get_text().set_weight("bold")
+            cell.get_text().set_weight("semibold")
+            cell.get_text().set_fontsize(8.5)
 
-        # Apply red/blue/black coloring to data cells (not headers)
-        if r >= 1 and c >= 0:
-            row_label_original = summary_pdf_display.index[r - 1]
-            col_name = summary_pdf_display.columns[c]
+        # Data column: keep centered but smaller font to fit more text
+        if c == 1:
+            cell.get_text().set_fontsize(8.5)
 
+        # Apply Min / Average / Max colors
+        col_name_map = {
+            1: "Data Column",
+            2: "Min",
+            3: "Average",
+            4: "Max",
+            5: "Low Target",
+            6: "High Target",
+        }
+
+        if c in [2, 3, 4]:
+            col_name = col_name_map[c]
             css = style_df_pdf.at[row_label_original, col_name]
             m = re.search(r"color:\s*([^;]+)", str(css))
             if m:
@@ -2563,7 +2640,7 @@ if save_irrig_settings:
     st.success("Irrigation settings saved.")
     st.rerun()
 
-    
+
 # ----------------------------------------------------------
 # Irrigation plots (PER ZONE)
 # ----------------------------------------------------------
