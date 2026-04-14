@@ -670,6 +670,7 @@ def compute_irrigation_events_per_day(
 
 #Helpers for updated editable table
 IGNORE_RAW = "(None)"
+IRRIGATION_EVENTS_ROW_LABEL = "Irrigation Events per Day (#)"
 
 SUMMARY_CANON_ROWS = [
     ("AirTemp", "Air Temperature"),
@@ -1174,7 +1175,7 @@ with right_col:
                 target_vpd_high=float(units_settings.get("target_vpd_high", 0.8)),
                 irrigation_trigger=float(units_settings.get("irrigation_trigger", 1.0)),
                 irrigation_min_interval_min=float(units_settings.get("irrigation_min_interval_min", 7.0)),
-                leaf_wetness_unit=leaf_wetness_choice,
+                #leaf_wetness_unit=leaf_wetness_choice,
                 irrigation_sensitivity_pct=float(units_settings.get("irrigation_sensitivity_pct", 3.0)),
                 leaf_wetness_min_interval_min=float(units_settings.get("leaf_wetness_min_interval_min", 7.0)),
                 water_applied_per_event_ml_m2=float(units_settings.get("water_applied_per_event_ml_m2", 10.0)),
@@ -1529,20 +1530,19 @@ if numeric_cols:
         # DLI band Target column (now that the DLI row exists)
         _set_targets("Daily Light Integral", target_dli_low, target_dli_high)
 
-    # ---- Add irrigation events/day rows (PER ZONE, full days only) ----
-    if events_by_zone is not None and not events_by_zone.empty:
-        s = events_total.astype(float)
+        # ---- Add ONE irrigation events/day row (full days only) ----
+        if events_total is not None and not events_total.empty:
+            s = events_total.astype(float)
 
-        irrig_row = pd.DataFrame(
-            {
-                "Min": [float(s.min())],
-                "Average": [float(s.mean())],
-                "Max": [float(s.max())],
-            },
-            index=["Events per Day (#)"],
-        )
-        summary = pd.concat([summary, irrig_row], axis=0)
-
+            irrig_row = pd.DataFrame(
+                {
+                    "Min": [float(s.min())],
+                    "Average": [float(s.mean())],
+                    "Max": [float(s.max())],
+                },
+                index=[IRRIGATION_EVENTS_ROW_LABEL],
+            )
+            summary = pd.concat([summary, irrig_row], axis=0)
 
     # ---- Add Water Applied per Day rows  ----
     if water_applied_per_event_ml_m2 > 0:
@@ -1613,16 +1613,11 @@ if numeric_cols:
         "💦 Relative Humidity (%)",
         vpd_label,
         "💡 Light Intensity (PPFD - µmol m⁻² s⁻¹)",
+        f"🚿 {IRRIGATION_EVENTS_ROW_LABEL}",
         "🌤️ Daily Light Integral (mol m⁻² d⁻¹)",
-    ]
-
-    # Use irrigation EVENTS rows as the editable mapping rows for Irrigation1..N
-    desired_rows += [f"🚿 {canon} Events per Day (#)" for canon in visible_irrig_canons]
-
-    # Rows stay present even when not yet available
-    desired_rows += [
         "💧 Water Applied per Day (mL/m²·day)",
     ]
+
 
     # Reindex to force all rows to exist; missing ones become NaN -> later display as "-"
     summary = summary.reindex(desired_rows)
@@ -1785,7 +1780,7 @@ if numeric_cols:
             return "RH"
         if "Light Intensity" in s:
             return "PAR"
-        if "Irrigation Events" in s:
+        if IRRIGATION_EVENTS_ROW_LABEL in s:
             return "Irrigation1"
 
         # derived-only rows: no direct mapping
@@ -1901,7 +1896,7 @@ if numeric_cols:
         f"🍂 Leaf Temperature ({temp_symbol})",
         "💦 Relative Humidity (%)",
         "💡 Light Intensity (PPFD - µmol m⁻² s⁻¹)",
-        "🚿 Irrigation Events per Day (#)",
+        f"🚿 {IRRIGATION_EVENTS_ROW_LABEL}",
         CALC_SEPARATOR_LABEL,
         vpd_label,
         "🌤️ Daily Light Integral (mol m⁻² d⁻¹)",
