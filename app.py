@@ -862,7 +862,7 @@ if not user:
 logo_col, left_col, mid_col, right_col = st.columns([1.0, 1.15, 1.15, 0.8], gap="medium")
 
 with logo_col:
-    st.image("assets/EnDash_Logo_V2.png", use_container_width=True)
+    st.image("assets/EnDash_Logo_V3.png", use_container_width=True)
 
 with left_col:
     #st.markdown("### New File Upload")
@@ -1328,6 +1328,13 @@ else:
     st.caption("Time information is not available in this file.")
 
 
+pdf_summary_title = None
+
+if start_time is not None and end_time is not None:
+    pdf_summary_title = (
+        f"Data Summary from {start_time.strftime('%Y-%m-%d %H:%M:%S')} "
+        f"to {end_time.strftime('%Y-%m-%d %H:%M:%S')} - Interval: {interval_str}"
+    )
 
 # # -----------------------------
 # # Summary metrics (3 columns)
@@ -1980,14 +1987,14 @@ if numeric_cols:
         #height="content",
         key=f"home_summary_editor_{int(rec['id'])}",
         column_config={
-            "Metric": st.column_config.TextColumn("Metric", disabled=True, width="large"),
+            "Metric": st.column_config.TextColumn("Metric", disabled=True, width="medium"),
             "Data Column": st.column_config.SelectboxColumn(
                 "Data",
                 options=raw_options,
                 required=False,
                 format_func=_format_data_column_option,
                 help="Select which file column should map to this metric for this file. Rows showing '-' are calculated values and cannot be mapped.",
-                width="large",
+                width="medium",
             ),
             "Minimum": st.column_config.TextColumn("Minimum", disabled=True, width="small"),
             "Average": st.column_config.TextColumn("Average", disabled=True, width="small"),
@@ -2130,32 +2137,6 @@ x_values = df_display["Time"] if use_time_axis else df_display.index
 
 figs_for_pdf = []
 
-# --- Cover page for PDF (data summary + targets) ---
-fig_cover, ax_cover = plt.subplots(figsize=(8.5, 11))
-ax_cover.axis("off")
-title = "EnDash Dashboard Report"
-ax_cover.text(0.5, 0.96, title, ha="center", va="top", fontsize=18, fontweight="bold")
-
-ax_cover.text(0.05, 0.90, f"File: {filename}", fontsize=11)
-ax_cover.text(0.05, 0.87, f"Uploaded: {rec['uploaded_at']}", fontsize=11)
-
-if start_time is not None and end_time is not None:
-    interval_str = format_timedelta(interval_td) if interval_td is not None else "unknown"
-    ax_cover.text(0.05, 0.83, f"Time range: {start_time}  →  {end_time}", fontsize=11)
-    ax_cover.text(0.05, 0.80, f"Approx. interval: {interval_str}", fontsize=11)
-
-ax_cover.text(0.05, 0.74, "Targets", fontsize=13, fontweight="bold")
-ax_cover.text(0.07, 0.70, f"Temperature band: {target_temp_low:.1f} to {target_temp_high:.1f} ({'°F' if temp_unit=='F' else '°C'})", fontsize=11)
-ax_cover.text(0.07, 0.67, f"Relative humidity band: {target_rh_low:.0f}% to {target_rh_high:.0f}%", fontsize=11)
-ax_cover.text(0.07, 0.64, f"PPFD max: {target_ppfd:.1f} µmol m⁻² s⁻¹", fontsize=11)
-ax_cover.text(0.07, 0.61, f"DLI band: {target_dli_low:.1f} mol m⁻² d⁻¹ to {target_dli_high:.1f} mol m⁻² d⁻¹", fontsize=11)
-ax_cover.text(0.07, 0.58, f"VPD band: {target_vpd_low:.2f} to {target_vpd_high:.2f} kPa", fontsize=11)
-
-# if temp_within_pct is not None:
-#     ax_cover.text(0.05, 0.50, "Summary", fontsize=13, fontweight="bold")
-#     ax_cover.text(0.07, 0.46, f"Time in target temperature band: {temp_within_pct:.0f}%", fontsize=11)
-
-figs_for_pdf.append(fig_cover)
 
 # --- Summary-table page in PDF ---
 def _pdf_ellipsis(text, max_chars: int) -> str:
@@ -2187,8 +2168,30 @@ def _pdf_fmt_value(val, decimals: int | None = None) -> str:
 
 # --- Summary-table page in PDF ---
 if summary is not None:
-    fig_summary, ax_summary = plt.subplots(figsize=(11.5, 5.3))
+    fig_summary, ax_summary = plt.subplots(figsize=(11.5, 6.2))     #5.3 prev
     ax_summary.axis("off")
+
+    # Title/subtitle above the PDF summary table
+    if pdf_summary_title:
+        ax_summary.text(
+            0.01, 1.08,
+            pdf_summary_title,
+            transform=ax_summary.transAxes,
+            ha="left",
+            va="bottom",
+            fontsize=14,
+            fontweight="bold",
+        )
+
+    ax_summary.text(
+        0.01, 1.03,
+        f"Data File: {filename}",
+        transform=ax_summary.transAxes,
+        ha="left",
+        va="bottom",
+        fontsize=10,
+        color="dimgray",
+    )
 
     def _strip_non_ascii(s: str) -> str:
         return s.encode("ascii", errors="ignore").decode("ascii").strip()
@@ -2255,7 +2258,7 @@ if summary is not None:
         cellText=pdf_rows,
         colLabels=pdf_col_labels,
         colWidths=col_widths,
-        loc="center",
+        bbox=[0.0, 0.02, 1.0, 0.90],
         cellLoc="center",
         colLoc="center",
     )

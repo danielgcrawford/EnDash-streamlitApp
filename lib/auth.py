@@ -48,7 +48,7 @@ def render_sidebar():
     """Render the shared sidebar with nav on every page."""
     with st.sidebar:
         #st.title("🌿 EnDash")
-        st.image("assets/EnDash_Logo_V2.png", use_container_width=False, width=170)
+        st.image("assets/EnDash_Logo_V3.png", use_container_width=False, width=170)
 
         user = current_user()
 
