@@ -1558,7 +1558,7 @@ if numeric_cols:
             wapd = events_total.astype(float) * float(water_applied_per_event_ml_m2)
             wapd_row = pd.DataFrame(
                 {"Min": [float(wapd.min())], "Average": [float(wapd.mean())], "Max": [float(wapd.max())]},
-                index=["Water Applied per Day (mL/m²·day)"],
+                index=["Water Applied per Day (mL m⁻² d⁻¹)"],
             )
             summary = pd.concat([summary, wapd_row], axis=0)
 
@@ -1622,7 +1622,7 @@ if numeric_cols:
         "💡 Light Intensity (PPFD - µmol m⁻² s⁻¹)",
         f"🚿 {IRRIGATION_EVENTS_ROW_LABEL}",
         "🌤️ Daily Light Integral (mol m⁻² d⁻¹)",
-        "💧 Water Applied per Day (mL/m²·day)",
+        "💧 Water Applied per Day (mL m⁻² d⁻¹)",
     ]
 
 
@@ -1907,7 +1907,7 @@ if numeric_cols:
         CALC_SEPARATOR_LABEL,
         vpd_label,
         "🌤️ Daily Light Integral (mol m⁻² d⁻¹)",
-        "💧 Water Applied per Day (mL/m²·day)",
+        "💧 Water Applied per Day (mL m⁻² d⁻¹)",
     ]
 
     editor_rows = []
@@ -2168,7 +2168,7 @@ def _pdf_fmt_value(val, decimals: int | None = None) -> str:
 
 # --- Summary-table page in PDF ---
 if summary is not None:
-    fig_summary, ax_summary = plt.subplots(figsize=(11.5, 6.2))     #5.3 prev
+    fig_summary, ax_summary = plt.subplots(figsize=(12.3, 6.2))  #Prev 11.5   #5.3 prev
     ax_summary.axis("off")
 
     # Title/subtitle above the PDF summary table
@@ -2193,8 +2193,23 @@ if summary is not None:
         color="dimgray",
     )
 
-    def _strip_non_ascii(s: str) -> str:
-        return s.encode("ascii", errors="ignore").decode("ascii").strip()
+    def _strip_pdf_emoji_only(s: str) -> str:
+        """
+        Remove leading emoji/icons used in the website table labels,
+        but preserve scientific symbols like µ, ², ⁻, etc.
+        """
+        s = str(s).strip()
+
+        emoji_prefixes = [
+            "🌡️ ", "🍂 ", "💦 ", "🍃 ", "💡 ",
+            "🌤️ ", "🚿 ", "💧 ", "🌿 "
+        ]
+
+        for prefix in emoji_prefixes:
+            if s.startswith(prefix):
+                return s[len(prefix):].strip()
+
+        return s
 
     def _pdf_ellipsis(text, max_chars: int) -> str:
         s = "" if text is None else str(text)
@@ -2232,7 +2247,7 @@ if summary is not None:
     pdf_row_keys = []
 
     for row_label in summary_pdf_display.index:
-        metric_text = _strip_non_ascii(str(row_label))
+        metric_text = _strip_pdf_emoji_only(str(row_label))
 
         # Keep metric fully shown as much as possible
         metric_text = _pdf_ellipsis(metric_text, 42)
@@ -2603,7 +2618,7 @@ with st.form("homepage_irrigation_settings_form", clear_on_submit=False):
         )
 
     water_applied_per_event_ml_m2_input = st.number_input(
-        "Water Applied per Irrigation Event (mL/m²)",
+        "Water Applied per Irrigation Event (mL m⁻²)",
         min_value=0.0,
         step=1.0,
         value=float(water_applied_per_event_ml_m2),
