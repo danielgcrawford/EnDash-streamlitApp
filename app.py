@@ -2168,29 +2168,64 @@ def _pdf_fmt_value(val, decimals: int | None = None) -> str:
 
 # --- Summary-table page in PDF ---
 if summary is not None:
-    fig_summary, ax_summary = plt.subplots(figsize=(12.3, 6.2))  #Prev 11.5   #5.3 prev
+    fig_summary, ax_summary = plt.subplots(figsize=(12.2, 6.4))
     ax_summary.axis("off")
+    fig_summary.subplots_adjust(left=0.03, right=0.97, top=0.95, bottom=0.04)
 
-    # Title/subtitle above the PDF summary table
-    if pdf_summary_title:
-        ax_summary.text(
-            0.01, 1.08,
-            pdf_summary_title,
-            transform=ax_summary.transAxes,
-            ha="left",
-            va="bottom",
-            fontsize=14,
-            fontweight="bold",
-        )
+    # ---------- PDF header area ----------
+    logo_path = Path("assets/EnDash_Logo_V3.png")
+
+    summary_range_value = (
+        f"{start_time.strftime('%Y-%m-%d %H:%M')} to {end_time.strftime('%Y-%m-%d %H:%M')}"
+        if start_time is not None and end_time is not None
+        else "Unknown"
+    )
+    interval_value = interval_str if interval_td is not None else "Unknown"
+
+    subtitle_color = "black"  #prv: dimgray
+    subtitle_size = 11
+
+    # Logo in top-left
+    if logo_path.exists():
+        try:
+            logo_img = plt.imread(str(logo_path))
+            logo_ax = fig_summary.add_axes([0.035, 0.950, 0.13, 0.10])  # left, bottom, width, height - prev: 0.015, 0.865, 0.11, 0.11
+            logo_ax.imshow(logo_img)
+            logo_ax.axis("off")
+        except Exception:
+            pass
+
+    # Three gray lines to the right of the logo
+    text_x = 0.18
 
     ax_summary.text(
-        0.01, 1.03,
+        text_x, 1.060,
+        f"Data Summary: {summary_range_value}",
+        transform=ax_summary.transAxes,
+        ha="left",
+        va="bottom",
+        fontsize=subtitle_size,
+        color=subtitle_color,
+    )
+
+    ax_summary.text(
+        text_x, 1.025,
         f"Data File: {filename}",
         transform=ax_summary.transAxes,
         ha="left",
         va="bottom",
-        fontsize=10,
-        color="dimgray",
+        fontsize=subtitle_size,
+        color=subtitle_color,
+    )
+
+    ax_summary.text(
+        text_x, 0.990,
+        f"Data Collection Interval: {interval_value}",
+        transform=ax_summary.transAxes,
+        ha="left",
+        va="bottom",
+        fontsize=subtitle_size,
+        color=subtitle_color,
     )
 
     def _strip_pdf_emoji_only(s: str) -> str:
@@ -2267,13 +2302,13 @@ if summary is not None:
         pdf_row_keys.append(row_label)
 
     # Wider Metric column, moderate Data column, slimmer numeric columns
-    col_widths = [0.34, 0.25, 0.11, 0.11, 0.11, 0.13, 0.13]
+    col_widths = [0.31, 0.21, 0.09, 0.09, 0.09, 0.10, 0.11]
 
     tbl = ax_summary.table(
         cellText=pdf_rows,
         colLabels=pdf_col_labels,
         colWidths=col_widths,
-        bbox=[0.0, 0.02, 1.0, 0.90],
+        bbox=[0.01, 0.1, 0.98, 0.82],    #prev: 0.0, 0.02, 1.0, 0.90
         cellLoc="center",
         colLoc="center",
     )
