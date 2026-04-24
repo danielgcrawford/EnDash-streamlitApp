@@ -859,7 +859,7 @@ if not user:
 #     download_slot = st.empty()
 
 # ----- Quick Upload panel (always visible) -----
-logo_col, left_col, mid_col, right_col = st.columns([1.0, 1.15, 1.15, 0.8], gap="medium")
+logo_col, left_col, mid_col = st.columns([0.8, 1.3, 1.3], gap="medium")
 
 with logo_col:
     st.image("assets/EnDash_Logo_V3.png", use_container_width=True)
@@ -1090,99 +1090,6 @@ with mid_col:
     rec = id_to_rec[int(selected_file_id)]
     st.session_state["selected_file_id"] = int(selected_file_id) 
 
-
-with right_col:
-    #st.subheader("Units", help="Set file units and dashboard temperature display.")
-
-    # Load current settings for units
-    units_row = db.get_or_create_settings(user["id"])
-    units_settings = dict(units_row) if units_row is not None else {}
-
-    current_orig_temp_unit = units_settings.get("orig_temp_unit", "C")
-    current_orig_light_unit = units_settings.get("orig_light_unit", "PPFD")
-    current_leaf_wetness_unit = units_settings.get("leaf_wetness_unit", "Percent")
-    current_dashboard_temp_unit = units_settings.get("temp_unit", "F")
-
-    TEMP_UNIT_OPTIONS = {
-        "Celsius (°C)": "C",
-        "Fahrenheit (°F)": "F",
-    }
-
-    LIGHT_UNIT_OPTIONS = {
-        "PPFD (µmol m⁻² s⁻¹)": "PPFD",
-        "Lux": "LUX",
-        "Kilolux (klux)": "KLUX",
-        "Footcandles (fc)": "FC",
-        "W m⁻²": "W_M2",
-    }
-
-    LEAF_WETNESS_OPTIONS = ["Percent", "Volts", "milliVolts"]
-
-    def _temp_unit_index(current_code: str) -> int:
-        labels = list(TEMP_UNIT_OPTIONS.keys())
-        for i, lbl in enumerate(labels):
-            if TEMP_UNIT_OPTIONS[lbl] == current_code:
-                return i
-        return 0
-
-    def _light_unit_index(current_code: str) -> int:
-        labels = list(LIGHT_UNIT_OPTIONS.keys())
-        for i, lbl in enumerate(labels):
-            if LIGHT_UNIT_OPTIONS[lbl] == current_code:
-                return i
-        return 0
-
-    if current_leaf_wetness_unit not in LEAF_WETNESS_OPTIONS:
-        current_leaf_wetness_unit = "Percent"
-
-    with st.expander("Edit units", expanded=False):
-        with st.form("home_units_form", clear_on_submit=False):
-            orig_temp_choice = st.selectbox(
-                "Data File Temperature",
-                options=list(TEMP_UNIT_OPTIONS.keys()),
-                index=_temp_unit_index(current_orig_temp_unit),
-            )
-
-            orig_light_choice = st.selectbox(
-                "Data File Light",
-                options=list(LIGHT_UNIT_OPTIONS.keys()),
-                index=_light_unit_index(current_orig_light_unit),
-            )
-
-            dashboard_temp_choice = st.selectbox(
-                "Dashboard Temperature",
-                options=list(TEMP_UNIT_OPTIONS.keys()),
-                index=_temp_unit_index(current_dashboard_temp_unit),
-            )
-
-            save_units = st.form_submit_button("Save Units", use_container_width=True)
-
-        if save_units:
-            # keep existing non-unit settings unchanged
-            db.update_settings(
-                user["id"],
-                orig_temp_unit=TEMP_UNIT_OPTIONS[orig_temp_choice],
-                orig_light_unit=LIGHT_UNIT_OPTIONS[orig_light_choice],
-                temp_unit=TEMP_UNIT_OPTIONS[dashboard_temp_choice],
-                target_low=float(units_settings.get("target_low", 65.0)),
-                target_high=float(units_settings.get("target_high", 80.0)),
-                target_rh_low=float(units_settings.get("target_rh_low", 70.0)),
-                target_rh_high=float(units_settings.get("target_rh_high", 95.0)),
-                target_ppfd=float(units_settings.get("target_ppfd", 150.0)),
-                target_dli_low=float(units_settings.get("target_dli_low", 8.0)),
-                target_dli_high=float(units_settings.get("target_dli_high", 12.0)),
-                target_vpd_low=float(units_settings.get("target_vpd_low", 0.2)),
-                target_vpd_high=float(units_settings.get("target_vpd_high", 0.8)),
-                irrigation_trigger=float(units_settings.get("irrigation_trigger", 1.0)),
-                irrigation_min_interval_min=float(units_settings.get("irrigation_min_interval_min", 7.0)),
-                #leaf_wetness_unit=leaf_wetness_choice,
-                irrigation_sensitivity_pct=float(units_settings.get("irrigation_sensitivity_pct", 3.0)),
-                leaf_wetness_min_interval_min=float(units_settings.get("leaf_wetness_min_interval_min", 7.0)),
-                water_applied_per_event_ml_m2=float(units_settings.get("water_applied_per_event_ml_m2", 10.0)),
-            )
-            st.rerun()
-    
-    #Download Dashboard button
     download_slot = st.empty()
 
 st.markdown("---")
@@ -1214,6 +1121,96 @@ if "Time" in df.columns:
 # ----- Load per-user settings -----
 settings_row = db.get_or_create_settings(user["id"])
 settings = dict(settings_row) if settings_row is not None else {}
+
+# ----- Home-only Units section in sidebar -----
+units_settings = settings
+
+current_orig_temp_unit = units_settings.get("orig_temp_unit", "C")
+current_orig_light_unit = units_settings.get("orig_light_unit", "PPFD")
+current_leaf_wetness_unit = units_settings.get("leaf_wetness_unit", "Percent")
+current_dashboard_temp_unit = units_settings.get("temp_unit", "F")
+
+TEMP_UNIT_OPTIONS = {
+    "Celsius (°C)": "C",
+    "Fahrenheit (°F)": "F",
+}
+
+LIGHT_UNIT_OPTIONS = {
+    "PPFD (µmol m⁻² s⁻¹)": "PPFD",
+    "Lux": "LUX",
+    "Kilolux (klux)": "KLUX",
+    "Footcandles (fc)": "FC",
+    "W m⁻²": "W_M2",
+}
+
+LEAF_WETNESS_OPTIONS = ["Percent", "Volts", "milliVolts"]
+
+def _temp_unit_index(current_code: str) -> int:
+    labels = list(TEMP_UNIT_OPTIONS.keys())
+    for i, lbl in enumerate(labels):
+        if TEMP_UNIT_OPTIONS[lbl] == current_code:
+            return i
+    return 0
+
+def _light_unit_index(current_code: str) -> int:
+    labels = list(LIGHT_UNIT_OPTIONS.keys())
+    for i, lbl in enumerate(labels):
+        if LIGHT_UNIT_OPTIONS[lbl] == current_code:
+            return i
+    return 0
+
+if current_leaf_wetness_unit not in LEAF_WETNESS_OPTIONS:
+    current_leaf_wetness_unit = "Percent"
+
+with st.sidebar:
+    st.divider()
+    st.subheader("Units")
+
+    with st.form("home_units_form_sidebar", clear_on_submit=False):
+        orig_temp_choice = st.selectbox(
+            "Data File Temperature",
+            options=list(TEMP_UNIT_OPTIONS.keys()),
+            index=_temp_unit_index(current_orig_temp_unit),
+        )
+
+        orig_light_choice = st.selectbox(
+            "Data File Light",
+            options=list(LIGHT_UNIT_OPTIONS.keys()),
+            index=_light_unit_index(current_orig_light_unit),
+        )
+
+        dashboard_temp_choice = st.selectbox(
+            "Dashboard Temperature",
+            options=list(TEMP_UNIT_OPTIONS.keys()),
+            index=_temp_unit_index(current_dashboard_temp_unit),
+        )
+
+        save_units = st.form_submit_button("Save Units", use_container_width=True)
+
+    if save_units:
+        db.update_settings(
+            user["id"],
+            orig_temp_unit=TEMP_UNIT_OPTIONS[orig_temp_choice],
+            orig_light_unit=LIGHT_UNIT_OPTIONS[orig_light_choice],
+            temp_unit=TEMP_UNIT_OPTIONS[dashboard_temp_choice],
+            target_low=float(units_settings.get("target_low", 65.0)),
+            target_high=float(units_settings.get("target_high", 80.0)),
+            target_rh_low=float(units_settings.get("target_rh_low", 70.0)),
+            target_rh_high=float(units_settings.get("target_rh_high", 95.0)),
+            target_ppfd=float(units_settings.get("target_ppfd", 150.0)),
+            target_dli_low=float(units_settings.get("target_dli_low", 8.0)),
+            target_dli_high=float(units_settings.get("target_dli_high", 12.0)),
+            target_vpd_low=float(units_settings.get("target_vpd_low", 0.2)),
+            target_vpd_high=float(units_settings.get("target_vpd_high", 0.8)),
+            irrigation_trigger=float(units_settings.get("irrigation_trigger", 1.0)),
+            irrigation_min_interval_min=float(units_settings.get("irrigation_min_interval_min", 7.0)),
+            leaf_wetness_unit=units_settings.get("leaf_wetness_unit", "Percent"),
+            irrigation_sensitivity_pct=float(units_settings.get("irrigation_sensitivity_pct", 3.0)),
+            leaf_wetness_min_interval_min=float(units_settings.get("leaf_wetness_min_interval_min", 7.0)),
+            water_applied_per_event_ml_m2=float(units_settings.get("water_applied_per_event_ml_m2", 10.0)),
+        )
+        st.rerun()
+
 
 # ----- Load saved mapping for THIS file (per user per file) -----
 fcm = db.get_file_column_map(int(rec["id"]))
