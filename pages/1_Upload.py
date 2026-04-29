@@ -276,6 +276,83 @@ CANON_OUTPUT_ORDER = CANON_OUTPUT_BASE + IRR_CANONS
 # What we show in the mapping UI (includes optional Date/TimeOfDay)
 CANON_UI_BASE = ["Time", "Date", "TimeOfDay", "AirTemp", "LeafTemp", "RH", "PAR", "LeafWetness"]
 
+# ------------- Automatic data-quality filter limits ------------- 
+# Values outside these ranges are replaced with NaN in the cleaned file.
+
+FILTER_REMOVAL_WARNING_PCT = 10.0
+
+FILTER_LIMITS = {
+    "AirTemp": {
+        "C": (0.0, 50.0),
+        "F": (0.0, 120.0),
+    },
+    "LeafTemp": {
+        "C": (0.0, 50.0),
+        "F": (0.0, 120.0),
+    },
+    "RH": (0.0, 100.0),
+    "LeafWetness": (0.0, 100.0),
+    "PAR": (0.0, None),
+}
+
+FILTER_LABELS = {
+    "AirTemp": "Air Temperature",
+    "LeafTemp": "Leaf Temperature",
+    "RH": "Relative Humidity",
+    "LeafWetness": "Leaf Wetness",
+    "PAR": "Light",
+}
+
+
+def apply_realistic_value_filters(
+    df_clean: pd.DataFrame,
+    *,
+    orig_temp_unit: str = "C",
+    show_warnings: bool = False,
+) -> pd.DataFrame:
+    """
+    Replace unrealistic sensor values with NaN so they are ignored in summaries and graphs.
+    Does NOT delete rows and does NOT modify the original raw uploaded file.
+    """
+    df_out = df_clean.copy()
+
+    temp_unit = "F" if str(orig_temp_unit).upper() == "F" else "C"
+
+    for col, limits in FILTER_LIMITS.items():
+        if col not in df_out.columns:
+            continue
+
+        s = pd.to_numeric(df_out[col], errors="coerce")
+
+        if col in ["AirTemp", "LeafTemp"]:
+            low, high = limits[temp_unit]
+        else:
+            low, high = limits
+
+        valid = pd.Series(True, index=s.index)
+
+        if low is not None:
+            valid &= s >= float(low)
+        if high is not None:
+            valid &= s <= float(high)
+
+        original_nonmissing = s.notna()
+        removed = original_nonmissing & ~valid
+
+        n_total = int(original_nonmissing.sum())
+        n_removed = int(removed.sum())
+        pct_removed = (100.0 * n_removed / n_total) if n_total > 0 else 0.0
+
+        df_out[col] = s.mask(removed)
+
+        if show_warnings and pct_removed > FILTER_REMOVAL_WARNING_PCT:
+            st.warning(
+                f"{pct_removed:.0f}% of {FILTER_LABELS.get(col, col)} values removed - please check data quality"
+            )
+
+    return df_out
+
+
 def build_alias_table() -> Dict[str, set]:
     table = {}
     for canon, aliases in ALIASES.items():
@@ -687,7 +764,15 @@ def save_mapping_and_regenerate_cleaned_file(
     ext = Path(raw_filename).suffix or ".csv"
     df_raw2, _, _, _ = load_table_from_bytes(raw_obj["bytes"], ext)
 
+    settings = dict(db.get_or_create_settings(user_id) or {})
+    orig_temp_unit = settings.get("orig_temp_unit", "C")
+
     df_clean2 = build_clean_dataframe(df_raw2, raw_to_canon)
+    df_clean2 = apply_realistic_value_filters(
+        df_clean2,
+        orig_temp_unit=orig_temp_unit,
+        show_warnings=False,
+    )
 
     required_for_dashboard = ["Time", "AirTemp", "RH"]
     missing = [c for c in required_for_dashboard if c not in df_clean2.columns]
@@ -1000,7 +1085,15 @@ else:
             st.session_state[sig_key] = current_sig
             st.stop()
 
+        settings = dict(db.get_or_create_settings(user["id"]) or {})
+        orig_temp_unit = settings.get("orig_temp_unit", "C")
+
         df_clean = build_clean_dataframe(df_raw_full, raw_to_canon)
+        df_clean = apply_realistic_value_filters(
+            df_clean,
+            orig_temp_unit=orig_temp_unit,
+            show_warnings=True,
+        )
         missing = missing_required_cols(df_clean)
 
         # If we have a file_id already, save mapping progress immediately

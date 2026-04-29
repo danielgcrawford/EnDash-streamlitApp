@@ -95,6 +95,137 @@ CANON_OUTPUT_ORDER = CANON_OUTPUT_BASE + IRR_CANONS
 CANON_UI_BASE = ["Time", "Date", "TimeOfDay", "AirTemp", "LeafTemp", "RH", "PAR", "LeafWetness"]
 
 
+# ---------- Automatic data-quality filter limits ---------- 
+# Values outside these ranges are replaced with NaN in the cleaned file.
+
+FILTER_REMOVAL_WARNING_PCT = 10.0
+
+FILTER_LIMITS = {
+    "AirTemp": {
+        "C": (0.0, 50.0),
+        "F": (0.0, 120.0),
+    },
+    "LeafTemp": {
+        "C": (0.0, 50.0),
+        "F": (0.0, 120.0),
+    },
+    "RH": (0.0, 100.0),
+    "LeafWetness": (0.0, 100.0),
+    "PAR": (0.0, None),  # remove negative light values only
+}
+
+FILTER_LABELS = {
+    "AirTemp": "Air Temperature",
+    "LeafTemp": "Leaf Temperature",
+    "RH": "Relative Humidity",
+    "LeafWetness": "Leaf Wetness",
+    "PAR": "Light",
+}
+
+
+def apply_realistic_value_filters(
+    df_clean: pd.DataFrame,
+    *,
+    orig_temp_unit: str = "C",
+    show_warnings: bool = False,
+) -> pd.DataFrame:
+    """
+    Replace unrealistic sensor values with NaN so they are ignored in summaries and graphs.
+    Does NOT delete rows and does NOT modify the original raw uploaded file.
+
+    show_warnings=True gives a short warning only when >10% of a column is removed.
+    """
+    df_out = df_clean.copy()
+
+    temp_unit = "F" if str(orig_temp_unit).upper() == "F" else "C"
+
+    for col, limits in FILTER_LIMITS.items():
+        if col not in df_out.columns:
+            continue
+
+        s = pd.to_numeric(df_out[col], errors="coerce")
+
+        if col in ["AirTemp", "LeafTemp"]:
+            low, high = limits[temp_unit]
+        else:
+            low, high = limits
+
+        valid = pd.Series(True, index=s.index)
+
+        if low is not None:
+            valid &= s >= float(low)
+        if high is not None:
+            valid &= s <= float(high)
+
+        # Only count originally non-missing values.
+        original_nonmissing = s.notna()
+        removed = original_nonmissing & ~valid
+
+        n_total = int(original_nonmissing.sum())
+        n_removed = int(removed.sum())
+        pct_removed = (100.0 * n_removed / n_total) if n_total > 0 else 0.0
+
+        df_out[col] = s.mask(removed)
+
+        if show_warnings and pct_removed > FILTER_REMOVAL_WARNING_PCT:
+            st.warning(
+                f"{pct_removed:.0f}% of {FILTER_LABELS.get(col, col)} values removed - please check data quality"
+            )
+
+    return df_out
+
+def regenerate_cleaned_file_with_filters(
+    *,
+    file_id: int,
+    orig_temp_unit: str,
+    show_warnings: bool = False,
+) -> bool:
+    """
+    Rebuild cleaned dashboard CSV from saved raw upload,
+    apply realistic-value filters, and overwrite only the cleaned CSV.
+
+    Raw uploaded file bytes stay unchanged.
+    """
+    raw_obj = db.get_raw_file_bytes(int(file_id))
+    if raw_obj is None:
+        return False
+
+    fcm = db.get_file_column_map(int(file_id))
+    if not fcm or not fcm.get("canon_to_raw"):
+        return False
+
+    raw_filename = raw_obj["raw_filename"]
+    ext = Path(raw_filename).suffix or ".csv"
+
+    df_raw2, _, _, _ = load_table_from_bytes(raw_obj["bytes"], ext)
+
+    canon_to_raw = fcm.get("canon_to_raw") or {}
+    raw_to_canon = {
+        str(raw): str(canon)
+        for canon, raw in canon_to_raw.items()
+        if raw
+    }
+
+    df_clean2 = build_clean_dataframe(df_raw2, raw_to_canon)
+
+    required_for_dashboard = ["Time", "AirTemp", "RH"]
+    missing = [c for c in required_for_dashboard if c not in df_clean2.columns]
+    if missing:
+        return False
+
+    df_clean2 = apply_realistic_value_filters(
+        df_clean2,
+        orig_temp_unit=orig_temp_unit,
+        show_warnings=show_warnings,
+    )
+
+    db.update_file_content(
+        int(file_id),
+        df_clean2.to_csv(index=False).encode("utf-8"),
+    )
+
+    return True
+
 def build_alias_table():
     table = {}
     for canon, aliases in ALIASES.items():
@@ -974,6 +1105,14 @@ with left_col:
 
                 # 3) Build cleaned dataframe
                 df_clean = build_clean_dataframe(df_raw, mapping_to_use)
+                settings_for_filter = dict(db.get_or_create_settings(user["id"]) or {})
+                orig_temp_unit_for_filter = settings_for_filter.get("orig_temp_unit", "C")
+
+                df_clean = apply_realistic_value_filters(
+                    df_clean,
+                    orig_temp_unit=orig_temp_unit_for_filter,
+                    show_warnings=True,
+                )
 
                 # Build stored filename: "<OriginalFilename>_<Username>.csv"
                 uname = username_slug(user)
@@ -994,6 +1133,13 @@ with left_col:
                     raw_bytes=file_bytes_raw,
                 )
 
+                filter_key = f"{int(file_db_id)}_{orig_temp_unit_for_filter}"
+
+                if "filtered_file_unit_keys" not in st.session_state:
+                    st.session_state["filtered_file_unit_keys"] = set()
+
+                st.session_state["filtered_file_unit_keys"].add(filter_key)
+
                 # Save mapping metadata so it can be reviewed/edited on the Upload page later
                 try:
                     canon_to_raw = {canon: None for canon in CANON_OUTPUT_ORDER}
@@ -1010,13 +1156,13 @@ with left_col:
                 except Exception:
                     pass
 
-                # 3) Build cleaned dataframe
-                df_clean = build_clean_dataframe(df_raw, auto_mapping)
+                # # 3) Build cleaned dataframe
+                # df_clean = build_clean_dataframe(df_raw, auto_mapping)
 
-                required_for_dashboard = ["Time", "AirTemp", "RH"]
-                missing_for_dashboard = [c for c in required_for_dashboard if c not in df_clean.columns]
-                if missing_for_dashboard:
-                    raise ValueError("Missing required columns for dashboard: " + ", ".join(missing_for_dashboard))
+                # required_for_dashboard = ["Time", "AirTemp", "RH"]
+                # missing_for_dashboard = [c for c in required_for_dashboard if c not in df_clean.columns]
+                # if missing_for_dashboard:
+                #     raise ValueError("Missing required columns for dashboard: " + ", ".join(missing_for_dashboard))
 
                 # 4) Create stored filename based on data start time
                 if "Time" in df_clean.columns and not df_clean["Time"].isna().all():
@@ -1097,6 +1243,33 @@ st.markdown("---")
 if rec is None:
     st.stop()
 
+# ----- Load per-user settings BEFORE selected file is read -----
+settings_row = db.get_or_create_settings(user["id"])
+settings = dict(settings_row) if settings_row is not None else {}
+
+orig_temp_unit = settings.get("orig_temp_unit", "C")
+
+# ----- Filter existing selected file only once per file/unit per session -----
+if "filtered_file_unit_keys" not in st.session_state:
+    st.session_state["filtered_file_unit_keys"] = set()
+
+selected_filter_key = f"{int(rec['id'])}_{orig_temp_unit}"
+
+if selected_filter_key not in st.session_state["filtered_file_unit_keys"]:
+    regenerated = regenerate_cleaned_file_with_filters(
+        file_id=int(rec["id"]),
+        orig_temp_unit=orig_temp_unit,
+        show_warnings=True,
+    )
+
+    # Mark it as checked either way so an older file without raw bytes
+    # does not keep retrying on every rerun.
+    st.session_state["filtered_file_unit_keys"].add(selected_filter_key)
+
+    if not regenerated:
+        st.caption("Filter update skipped.")
+
+
 # ----- Load selected file -----
 file_obj = db.get_file_bytes(rec["id"])
 if file_obj is None:
@@ -1118,9 +1291,6 @@ if "Time" in df.columns:
     df["Time"] = pd.to_datetime(df["Time"], errors="coerce")
     df = df.dropna(subset=["Time"]).sort_values("Time")
 
-# ----- Load per-user settings -----
-settings_row = db.get_or_create_settings(user["id"])
-settings = dict(settings_row) if settings_row is not None else {}
 
 # ----- Home-only Units section in sidebar -----
 units_settings = settings
@@ -1188,11 +1358,14 @@ with st.sidebar:
         save_units = st.form_submit_button("Save Units", use_container_width=True)
 
     if save_units:
+        new_orig_temp_unit = TEMP_UNIT_OPTIONS[orig_temp_choice]
+        new_orig_light_unit = LIGHT_UNIT_OPTIONS[orig_light_choice]
+        new_dashboard_temp_unit = TEMP_UNIT_OPTIONS[dashboard_temp_choice]
         db.update_settings(
             user["id"],
-            orig_temp_unit=TEMP_UNIT_OPTIONS[orig_temp_choice],
-            orig_light_unit=LIGHT_UNIT_OPTIONS[orig_light_choice],
-            temp_unit=TEMP_UNIT_OPTIONS[dashboard_temp_choice],
+            orig_temp_unit=new_orig_temp_unit,
+            orig_light_unit=new_orig_light_unit,
+            temp_unit=new_dashboard_temp_unit,
             target_low=float(units_settings.get("target_low", 65.0)),
             target_high=float(units_settings.get("target_high", 80.0)),
             target_rh_low=float(units_settings.get("target_rh_low", 70.0)),
@@ -1209,6 +1382,23 @@ with st.sidebar:
             leaf_wetness_min_interval_min=float(units_settings.get("leaf_wetness_min_interval_min", 7.0)),
             water_applied_per_event_ml_m2=float(units_settings.get("water_applied_per_event_ml_m2", 10.0)),
         )
+        new_orig_temp_unit = TEMP_UNIT_OPTIONS[orig_temp_choice]
+
+        regenerated = regenerate_cleaned_file_with_filters(
+            file_id=int(selected_file_id),
+            orig_temp_unit=new_orig_temp_unit,
+            show_warnings=True,
+        )
+
+        if "filtered_file_unit_keys" not in st.session_state:
+            st.session_state["filtered_file_unit_keys"] = set()
+
+        st.session_state["filtered_file_unit_keys"].add(
+            f"{int(selected_file_id)}_{new_orig_temp_unit}"
+        )
+
+        if not regenerated:
+            st.warning("Units saved, but file could not be regenerated.")
         st.rerun()
 
 
@@ -2103,6 +2293,11 @@ if numeric_cols:
 
         raw_to_canon = _invert_canon_to_raw(new_canon_to_raw)
         df_clean2 = build_clean_dataframe(df_raw2, raw_to_canon)
+        df_clean2 = apply_realistic_value_filters(
+            df_clean2,
+            orig_temp_unit=orig_temp_unit,
+            show_warnings=True,
+        )
 
         required_for_dashboard = ["Time", "AirTemp", "RH"]
         missing = [c for c in required_for_dashboard if c not in df_clean2.columns]
