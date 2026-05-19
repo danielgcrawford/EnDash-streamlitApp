@@ -21,9 +21,13 @@ def get_conn():
     """
     Get a Postgres connection using the URL in st.secrets['database']['url'].
 
-    We use RealDictCursor so rows behave like dicts (row['column']).
+    Using RealDictCursor so rows behave like dicts (row['column']).
     """
-    db_url = st.secrets["database"]["url"]
+
+    #db_url = st.secrets["database"]["url"]
+    import os
+    db_url = os.environ.get("DATABASE_URL")
+
     conn = psycopg2.connect(
         db_url,
         cursor_factory=psycopg2.extras.RealDictCursor,
