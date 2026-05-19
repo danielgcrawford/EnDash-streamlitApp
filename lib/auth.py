@@ -12,6 +12,7 @@ def verify_password(plaintext: str, password_hash: str) -> bool:
 
 def ensure_admin():
     """Create an admin if missing, using secrets or defaults."""
+    import os
     username = os.environ.get("ADMIN_USERNAME")
     password = os.environ.get("ADMIN_PASSWORD")
     existing = db.get_user_by_username(username)
