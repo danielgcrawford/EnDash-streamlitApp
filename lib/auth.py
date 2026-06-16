@@ -11,10 +11,36 @@ def verify_password(plaintext: str, password_hash: str) -> bool:
     return bcrypt_sha256.verify(plaintext, password_hash)
 
 def ensure_admin():
-    """Create an admin if missing, using secrets or defaults."""
+    """
+    Create an admin if missing.
+
+    Reads from:
+      1. Railway / environment variables
+      2. Local Streamlit secrets.toml
+    """
     import os
+
     username = os.environ.get("ADMIN_USERNAME")
     password = os.environ.get("ADMIN_PASSWORD")
+
+    if not username:
+        try:
+            username = st.secrets["ADMIN_USERNAME"]
+        except Exception:
+            username = None
+
+    if not password:
+        try:
+            password = st.secrets["ADMIN_PASSWORD"]
+        except Exception:
+            password = None
+
+    if not username or not password:
+        raise RuntimeError(
+            "Admin credentials are missing. Set ADMIN_USERNAME and ADMIN_PASSWORD "
+            "in Railway variables or in .streamlit/secrets.toml."
+        )
+
     existing = db.get_user_by_username(username)
     if existing is None:
         h = hash_password(password)

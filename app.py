@@ -69,17 +69,17 @@ def normalize(s: str) -> str:
 
 
 ALIASES = {
-    "Time": ["time", "timestamp", "date_time", "datetime", "recorded at", "date.time", "logtime", "measurement_time",],
-    "AirTemp": ["airtemp", "air_temp", "tair", "t_air", "ambient_temp", "air temperature", "air temperature (c)", "ta_c", "rhttemperature", "RHT - Temperature", "rhttemp", "RHT-Temperature",],
-    "LeafTemp": ["leaftemp", "leaf_temp", "tleaf", "leaf temperature", "canopy_temp", "tc_leaf", "leaf_t (c)", "leaf_tc",],
-    "RH": ["rel_hum", "relative_humidity", "humidity", "rh (%)", "rhhumidity", "rht_humidity", "rh_percent",],
-    "PAR": ["par", "ppfd", "photosynthetically active radiation", "par_umol", "par (umol m-2 s-1)", "par_umolm2s", "quantum", "quantum_sensor", "quantumsensor", "quantumpar",],
+    "Time": ["time", "timestamp", "date_time", "datetime", "recorded at", "date.time", "logtime", "measurement_time"],
+    "AirTemp": ["airtemp", "air_temp", "tair", "t_air", "ambient_temp", "air temperature", "air temperature (c)", "ta_c", "rhttemperature", "RHT - Temperature", "rhttemp", "RHT-Temperature","Climate Temperature"],
+    "LeafTemp": ["leaftemp", "leaf_temp", "tleaf", "leaf temperature", "canopy_temp", "tc_leaf", "leaf_t (c)", "leaf_tc","IR sensor"],
+    "RH": ["rel_hum", "relative_humidity", "humidity", "rh (%)", "rhhumidity", "rht_humidity", "rh_percent","Climate Humidity"],
+    "PAR": ["par", "ppfd", "photosynthetically active radiation", "par_umol", "par (umol m-2 s-1)", "par_umolm2s", "quantum", "quantum_sensor", "quantumsensor", "quantumpar","Light Sensor"],
     "Irrigation1": ["irrigation", "irrigation1", "irrigation_1", "irrig_1", "zone1", "valve1", "mist1"],
     "Irrigation2": ["irrigation2", "irrigation_2", "irrig_2", "zone2", "valve2", "mist2"],
     "Irrigation3": ["irrigation3", "irrigation_3", "irrig_3", "zone3", "valve3", "mist3"],
     "Irrigation4": ["irrigation4", "irrigation_4", "irrig_4", "zone4", "valve4", "mist4"],
     "Irrigation5": ["irrigation5", "irrigation_5", "irrig_5", "zone5", "valve5", "mist5"],
-    "LeafWetness": ["leaf wetness", "leafwetness", "leaf_wetness", "lw","leaf wetness %", "leaf wetness (%)", "leaf wetness (v)"],
+    "LeafWetness": ["leaf wetness", "leafwetness", "leaf_wetness", "lw","leaf wetness %", "leaf wetness (%)", "leaf wetness (v)","Leaf Moisture"],
     "Date": ["date", "day", "log_date", "recorded_date"],
     "TimeOfDay": ["time_of_day", "clock", "clock_time", "timeofday", "time only", "time_only"],
 }
@@ -184,8 +184,10 @@ def regenerate_cleaned_file_with_filters(
     Rebuild cleaned dashboard CSV from saved raw upload,
     apply realistic-value filters, and overwrite only the cleaned CSV.
 
-    Raw uploaded file bytes stay unchanged.
+    This should not require AirTemp/RH. Those can be corrected later
+    using the dashboard table mapping.
     """
+    existing_start, existing_end = get_existing_file_time_window(file_id)
     raw_obj = db.get_raw_file_bytes(int(file_id))
     if raw_obj is None:
         return False
@@ -207,11 +209,19 @@ def regenerate_cleaned_file_with_filters(
     }
 
     df_clean2 = build_clean_dataframe(df_raw2, raw_to_canon)
-
-    required_for_dashboard = ["Time", "AirTemp", "RH"]
-    missing = [c for c in required_for_dashboard if c not in df_clean2.columns]
-    if missing:
+    df_clean2 = apply_time_window(df_clean2, existing_start, existing_end)
+    # Do not block regeneration just because AirTemp/RH are missing.
+    # The user may still need to fix those mappings in the dashboard table.
+    if df_clean2.empty:
         return False
+
+    missing = [c for c in ["Time", "AirTemp", "RH"] if c not in df_clean2.columns]
+    if missing and show_warnings:
+        st.warning(
+            "Some dashboard columns are not currently mapped: "
+            + ", ".join(missing)
+            + ". Select the correct columns in the dashboard table."
+        )
 
     df_clean2 = apply_realistic_value_filters(
         df_clean2,
@@ -456,6 +466,339 @@ def username_slug(user) -> str:
     slug = re.sub(r"[^a-zA-Z0-9]+", "", base).lower()
     return slug or f"user{user['id']}"
 
+def safe_file_stem(filename: str) -> str:
+    """
+    Clean a filename stem so it is safe/readable in the EnDash file dropdown.
+    """
+    stem = Path(filename).stem
+    stem = re.sub(r"\s+", "_", stem)
+    stem = re.sub(r"[^A-Za-z0-9_-]+", "", stem)
+    stem = re.sub(r"_+", "_", stem).strip("_")
+    return stem or "file"
+
+
+def build_canon_to_raw_from_mapping(mapping_to_use: dict) -> dict:
+    """
+    Convert EnDash cleaning mapping:
+        {raw_col: canon_col}
+
+    into DB persistence format:
+        {canon_col: raw_col}
+    """
+    canon_to_raw = {canon: None for canon in CANON_OUTPUT_ORDER}
+
+    for raw, canon in mapping_to_use.items():
+        if canon in canon_to_raw:
+            canon_to_raw[canon] = raw
+
+    return canon_to_raw
+
+
+def data_quality_notes(df_clean: pd.DataFrame) -> list[str]:
+    """
+    Simple data-quality notes based on the already-cleaned EnDash dataframe.
+    This mirrors the useful part of process_grower.py without adding a separate script.
+    """
+    notes = []
+
+    if df_clean is None or df_clean.empty:
+        return ["Cleaned file is empty."]
+
+    total = len(df_clean)
+
+    if "Time" in df_clean.columns:
+        t = pd.to_datetime(df_clean["Time"], errors="coerce").sort_values()
+        bad_time = int(t.isna().sum())
+
+        if bad_time > 0:
+            notes.append(f"{bad_time:,} rows have unparseable timestamps.")
+
+        gaps = t.diff().dt.total_seconds()
+        large_gaps = int((gaps > 120).sum())
+
+        if large_gaps > 0:
+            notes.append(f"{large_gaps:,} timestamp gaps greater than 2 minutes detected.")
+
+    if "PAR" in df_clean.columns:
+        par = pd.to_numeric(df_clean["PAR"], errors="coerce")
+        missing = int(par.isna().sum())
+
+        if missing > 0 and total > 0:
+            notes.append(f"Light/PAR has {missing:,} missing values ({100 * missing / total:.0f}%).")
+
+    if "LeafWetness" in df_clean.columns:
+        lw = pd.to_numeric(df_clean["LeafWetness"], errors="coerce")
+
+        saturated = int((lw == 100).sum())
+        zero_pct = float((lw == 0).sum() / total * 100) if total > 0 else 0
+
+        if saturated > total * 0.05:
+            notes.append(f"Leaf Wetness has {saturated:,} rows at 100%; sensor may be saturated.")
+
+        if zero_pct > 80:
+            notes.append(f"Leaf Wetness is 0 for {zero_pct:.0f}% of rows; sensor may not have been active.")
+
+    return notes
+
+def get_existing_file_time_window(file_id: int):
+    """
+    Read the currently saved cleaned file and return its Time min/max.
+
+    This is used so weekly files stay weekly after the user edits mappings.
+    The raw upload may contain a month+ of data, but the selected cleaned file
+    may only represent one week.
+    """
+    file_obj = db.get_file_bytes(int(file_id))
+    if not file_obj:
+        return None, None
+
+    try:
+        existing_df = pd.read_csv(io.BytesIO(file_obj["bytes"]))
+    except Exception:
+        return None, None
+
+    if "Time" not in existing_df.columns:
+        return None, None
+
+    t = pd.to_datetime(existing_df["Time"], errors="coerce").dropna()
+
+    if t.empty:
+        return None, None
+
+    return t.min(), t.max()
+
+def get_same_raw_upload_file_ids(user_id: int, current_file_id: int) -> list[int]:
+    """
+    Return file IDs for this user that came from the same original raw upload.
+
+    Uses raw_filename only to avoid expensive BYTEA comparisons.
+    This is intended for weekly files created from one uploaded source file.
+    """
+    current_raw = db.get_raw_file_bytes(int(current_file_id))
+    if not current_raw:
+        return [int(current_file_id)]
+
+    current_raw_filename = current_raw.get("raw_filename")
+    if not current_raw_filename:
+        return [int(current_file_id)]
+
+    sibling_ids = []
+
+    for file_rec in db.list_user_files(int(user_id)):
+        fid = int(file_rec["id"])
+
+        raw = db.get_raw_file_bytes(fid)
+        if not raw:
+            continue
+
+        if raw.get("raw_filename") == current_raw_filename:
+            sibling_ids.append(fid)
+
+    return sorted(set(sibling_ids))
+
+def save_mapping_to_file_only(
+    *,
+    user_id: int,
+    file_id: int,
+    canon_to_raw: dict,
+    raw_columns: list[str],
+) -> None:
+    """
+    Save column mapping for a file without regenerating its cleaned CSV.
+    Used to quickly apply one week's mapping selections to sibling weeks.
+    """
+    db.upsert_file_column_map(
+        int(user_id),
+        int(file_id),
+        raw_columns=[str(c) for c in raw_columns],
+        canon_to_raw=canon_to_raw,
+        raw_preview_rows=None,
+    )
+
+def regenerate_file_from_mapping_preserve_window(
+    *,
+    user_id: int,
+    file_id: int,
+    canon_to_raw: dict,
+    raw_columns: list[str],
+    orig_temp_unit: str,
+) -> list[str]:
+    """
+    Apply canon_to_raw mapping to one file, regenerate its cleaned CSV from
+    the saved raw upload, and preserve the file's current Time window.
+
+    Returns a list of missing dashboard columns.
+    """
+    existing_start, existing_end = get_existing_file_time_window(int(file_id))
+
+    raw_obj = db.get_raw_file_bytes(int(file_id))
+    if raw_obj is None:
+        return ["raw upload bytes"]
+
+    raw_filename = raw_obj["raw_filename"]
+    ext = Path(raw_filename).suffix or ".csv"
+
+    df_raw2, _, _, _ = load_table_from_bytes(raw_obj["bytes"], ext)
+
+    raw_to_canon = _invert_canon_to_raw(canon_to_raw)
+
+    df_clean2 = build_clean_dataframe(df_raw2, raw_to_canon)
+
+    # Keep weekly files weekly
+    df_clean2 = apply_time_window(df_clean2, existing_start, existing_end)
+
+    df_clean2 = apply_realistic_value_filters(
+        df_clean2,
+        orig_temp_unit=orig_temp_unit,
+        show_warnings=False,
+    )
+
+    missing = [c for c in ["Time", "AirTemp", "RH"] if c not in df_clean2.columns]
+
+    raw_preview_rows = (
+        df_raw2.head(10)
+        .where(pd.notnull(df_raw2.head(10)), None)
+        .to_dict(orient="records")
+    )
+
+    # Save even if incomplete, so the user can continue correcting mapping.
+    db.update_file_content(
+        int(file_id),
+        df_clean2.to_csv(index=False).encode("utf-8"),
+    )
+
+    return missing
+
+def apply_time_window(df_in: pd.DataFrame, start_time, end_time) -> pd.DataFrame:
+    """
+    Limit a regenerated cleaned dataframe to the selected file's original
+    time range.
+    """
+    if start_time is None or end_time is None:
+        return df_in
+
+    if "Time" not in df_in.columns:
+        return df_in
+
+    df_out = df_in.copy()
+    df_out["Time"] = pd.to_datetime(df_out["Time"], errors="coerce")
+
+    return df_out[
+        (df_out["Time"] >= start_time)
+        & (df_out["Time"] <= end_time)
+    ].copy()
+
+def split_cleaned_by_iso_week(
+    df_clean: pd.DataFrame,
+    *,
+    original_name: str,
+    username: str,
+) -> list[dict]:
+    """
+    Split one cleaned EnDash dataframe into one dataframe per ISO week.
+
+    Returns:
+        [
+            {
+                "filename": "...csv",
+                "df": weekly_df,
+                "year": 2026,
+                "week": 6,
+                "date_min": "2026-02-02",
+                "date_max": "2026-02-08",
+                "rows": 10080,
+            },
+            ...
+        ]
+    """
+    if "Time" not in df_clean.columns:
+        raise ValueError("Cannot split by week because the cleaned file has no Time column.")
+
+    df = df_clean.copy()
+    df["Time"] = pd.to_datetime(df["Time"], errors="coerce")
+    df = df.dropna(subset=["Time"]).sort_values("Time")
+
+    if df.empty:
+        raise ValueError("Cannot split by week because no valid timestamps were found.")
+
+    iso = df["Time"].dt.isocalendar()
+    df["_iso_year"] = iso.year.astype(int)
+    df["_iso_week"] = iso.week.astype(int)
+
+    base = safe_file_stem(original_name)
+    uname = re.sub(r"[^A-Za-z0-9_-]+", "", username_slug(username if isinstance(username, dict) else {"username": username}))
+
+    weekly_outputs = []
+
+    for (year, week), group in df.groupby(["_iso_year", "_iso_week"], sort=True):
+        group = group.drop(columns=["_iso_year", "_iso_week"]).copy()
+
+        date_min = group["Time"].min().strftime("%Y-%m-%d")
+        date_max = group["Time"].max().strftime("%Y-%m-%d")
+
+        filename = f"{base}_Week{int(week):02d}_{int(year)}_{date_min}_to_{date_max}_{uname}.csv"
+
+        weekly_outputs.append(
+            {
+                "filename": filename,
+                "df": group,
+                "year": int(year),
+                "week": int(week),
+                "date_min": date_min,
+                "date_max": date_max,
+                "rows": int(len(group)),
+            }
+        )
+
+    return weekly_outputs
+
+
+def save_cleaned_week_with_mapping(
+    *,
+    user_id: int,
+    weekly_item: dict,
+    original_name: str,
+    raw_bytes: bytes,
+    raw_cols: list[str],
+    canon_to_raw: dict,
+    raw_preview_rows: list[dict],
+) -> int:
+    """
+    Save one weekly cleaned file to Neon while preserving:
+      - original raw upload bytes
+      - raw filename
+      - column mapping
+      - raw preview
+    """
+    cleaned_bytes = weekly_item["df"].to_csv(
+        index=False,
+        date_format="%Y-%m-%d %H:%M:%S",
+    ).encode("utf-8")
+
+    file_db_id = db.add_file_record(
+        user_id,
+        weekly_item["filename"],
+        cleaned_bytes,
+        raw_filename=original_name,
+        raw_bytes=raw_bytes,
+    )
+
+    db.upsert_file_column_map(
+        user_id,
+        file_db_id,
+        raw_columns=raw_cols,
+        canon_to_raw=canon_to_raw,
+        raw_preview_rows=raw_preview_rows,
+    )
+
+    db.set_last_upload_context(
+        user_id,
+        file_id=file_db_id,
+        raw_columns=raw_cols,
+        canon_to_raw=canon_to_raw,
+    )
+
+    return file_db_id
 
 def to_celsius(series: pd.Series, orig_is_fahrenheit: bool) -> pd.Series:
     if series is None:
@@ -1073,7 +1416,11 @@ with left_col:
                 auto_mapping, _, _ = map_columns(raw_cols, alias_table)
 
                 if not auto_mapping:
-                    raise ValueError("Could not automatically match any columns to Time/AirTemp/RH/PAR.")
+                    st.warning(
+                        "No dashboard columns were detected automatically. "
+                        "The file will still be saved so you can select columns in the dashboard table."
+                    )
+                    auto_mapping = {}
 
                 # Try to apply the user's LAST SAVED mapping template from the Upload page.
                 prefs = db.get_last_upload_context(user["id"])
@@ -1114,80 +1461,126 @@ with left_col:
                     show_warnings=True,
                 )
 
-                # Build stored filename: "<OriginalFilename>_<Username>.csv"
-                uname = username_slug(user)
+                # Validate cleaned file before saving
+                required_for_dashboard = ["Time", "AirTemp", "RH"]
+                missing_for_dashboard = [c for c in required_for_dashboard if c not in df_clean.columns]
 
-                orig_stem = Path(original_name).stem
-                orig_stem = re.sub(r"\s+", "_", orig_stem)
-                orig_stem = re.sub(r"[^A-Za-z0-9_-]+", "", orig_stem)
-                orig_stem = re.sub(r"_+", "_", orig_stem).strip("_") or "file"
+                if missing_for_dashboard:
+                    st.warning(
+                        "Some dashboard columns were not detected automatically: "
+                        + ", ".join(missing_for_dashboard)
+                        + ". The upload will still be saved. Select the correct columns in the dashboard table."
+                    )
 
-                stored_filename = f"{orig_stem}_{uname}.csv"
+                # Build mapping metadata once
+                canon_to_raw = build_canon_to_raw_from_mapping(mapping_to_use)
 
-                cleaned_bytes = df_clean.to_csv(index=False).encode("utf-8")
-                file_db_id = db.add_file_record(
-                    user["id"],
-                    stored_filename,
-                    cleaned_bytes,
-                    raw_filename=original_name,
-                    raw_bytes=file_bytes_raw,
+                raw_preview_rows = (
+                    df_raw.head(10)
+                    .where(pd.notnull(df_raw.head(10)), None)
+                    .to_dict(orient="records")
                 )
 
-                filter_key = f"{int(file_db_id)}_{orig_temp_unit_for_filter}"
+                saved_file_ids = []
+                saved_names = []
 
-                if "filtered_file_unit_keys" not in st.session_state:
-                    st.session_state["filtered_file_unit_keys"] = set()
+                can_split_by_week = (
+                    "Time" in df_clean.columns
+                    and pd.to_datetime(df_clean["Time"], errors="coerce").notna().any()
+                )
 
-                st.session_state["filtered_file_unit_keys"].add(filter_key)
+                if can_split_by_week:
+                    weekly_files = split_cleaned_by_iso_week(
+                        df_clean,
+                        original_name=original_name,
+                        username=user["username"],
+                    )
 
-                # Save mapping metadata so it can be reviewed/edited on the Upload page later
-                try:
-                    canon_to_raw = {canon: None for canon in CANON_OUTPUT_ORDER}
-                    for raw, canon in mapping_to_use.items():
-                        canon_to_raw[canon] = raw
+                    for weekly_item in weekly_files:
+                        file_db_id = save_cleaned_week_with_mapping(
+                            user_id=user["id"],
+                            weekly_item=weekly_item,
+                            original_name=original_name,
+                            raw_bytes=file_bytes_raw,
+                            raw_cols=raw_cols,
+                            canon_to_raw=canon_to_raw,
+                            raw_preview_rows=raw_preview_rows,
+                        )
+
+                        saved_file_ids.append(file_db_id)
+                        saved_names.append(weekly_item["filename"])
+
+                        filter_key = f"{int(file_db_id)}_{orig_temp_unit_for_filter}"
+
+                        if "filtered_file_unit_keys" not in st.session_state:
+                            st.session_state["filtered_file_unit_keys"] = set()
+
+                        st.session_state["filtered_file_unit_keys"].add(filter_key)
+
+                else:
+                    # Save one unsplit file so the user can fix mapping in the dashboard table.
+                    uname = username_slug(user)
+                    base = safe_file_stem(original_name)
+                    stored_filename = f"{base}_{uname}.csv"
+
+                    cleaned_bytes = df_clean.to_csv(index=False).encode("utf-8")
+
+                    file_db_id = db.add_file_record(
+                        user["id"],
+                        stored_filename,
+                        cleaned_bytes,
+                        raw_filename=original_name,
+                        raw_bytes=file_bytes_raw,
+                    )
 
                     db.upsert_file_column_map(
                         user["id"],
                         file_db_id,
                         raw_columns=raw_cols,
                         canon_to_raw=canon_to_raw,
-                        raw_preview_rows=df_raw.head(10).to_dict(orient="records"),
+                        raw_preview_rows=raw_preview_rows,
                     )
-                except Exception:
-                    pass
 
-                # # 3) Build cleaned dataframe
-                # df_clean = build_clean_dataframe(df_raw, auto_mapping)
+                    db.set_last_upload_context(
+                        user["id"],
+                        file_id=file_db_id,
+                        raw_columns=raw_cols,
+                        canon_to_raw=canon_to_raw,
+                    )
 
-                # required_for_dashboard = ["Time", "AirTemp", "RH"]
-                # missing_for_dashboard = [c for c in required_for_dashboard if c not in df_clean.columns]
-                # if missing_for_dashboard:
-                #     raise ValueError("Missing required columns for dashboard: " + ", ".join(missing_for_dashboard))
+                    saved_file_ids.append(file_db_id)
+                    saved_names.append(stored_filename)
 
-                # 4) Create stored filename based on data start time
-                if "Time" in df_clean.columns and not df_clean["Time"].isna().all():
-                    data_start = df_clean["Time"].min()
-                    data_start_str = data_start.strftime("%Y%m%dT%H%M")
+                    st.warning(
+                        "Time was not detected automatically, so the file was saved unsplit. "
+                        "Select the correct Time column in the dashboard table, then EnDash can regenerate the cleaned file."
+                    )
+                # Show data-quality notes after upload
+                notes = data_quality_notes(df_clean)
+
+                if notes:
+                    with st.expander("Data quality notes", expanded=False):
+                        for note in notes:
+                            st.write(f"- {note}")
+
+                if len(saved_names) == 1:
+                    st.success(f"Quick upload succeeded and saved `{saved_names[0]}`.")
                 else:
-                    data_start_str = time.strftime("%Y%m%dT%H%M", time.gmtime())
+                    st.success(f"Quick upload succeeded and saved {len(saved_names)} weekly files.")
 
-                uname = username_slug(user)
-                stored_filename = f"{uname}_{data_start_str}.csv"
-
-                cleaned_bytes = df_clean.to_csv(index=False).encode("utf-8")
-                db.add_file_record(user["id"], stored_filename, cleaned_bytes)
-
-                st.success(
-                    f"Quick upload succeeded and cleaned file `{stored_filename}` was saved."
-                )
+                    with st.expander("Saved weekly files", expanded=False):
+                        for name in saved_names:
+                            st.write(f"- {name}")
 
                 st.session_state.last_quick_upload_file_id = file_id
                 upload_succeeded = True
 
             except Exception as e:
-                st.error(f"Quick upload could not automatically process this file: {e}")
-                st.warning("Use the full Upload page to manually select columns and review the mapping for this dataset.")
-                st.page_link("pages/1_Upload.py", label="⚠️ Unable to Upload File – Open Upload Page")
+                st.error(f"Upload could not process this file: {e}")
+                st.info(
+                    "Check that the file can be read as CSV or Excel. If the file uploads but the data columns are incorrect, "
+                    "select the correct columns in the dashboard table."
+                )
 
     if upload_succeeded:
         st.rerun()
@@ -1679,9 +2072,54 @@ numeric_cols = [c for c in numeric_cols if c not in irrigation_cols]
 numeric_cols = [c for c in numeric_cols if c != "LeafWetness"]
 numeric_cols = [c for c in numeric_cols if c != "IrrigationEvents_LeafWetness"]
 
-summary = None
-summary_display = None
-summary_numeric = None
+if not numeric_cols:
+    summary = pd.DataFrame(
+        index=[
+            f"🌡️ Air Temperature ({'°F' if temp_unit == 'F' else '°C'})",
+            f"🍂 Leaf Temperature ({'°F' if temp_unit == 'F' else '°C'})",
+            "💦 Relative Humidity (%)",
+            "💡 Light Intensity (PPFD - µmol m⁻² s⁻¹)",
+            f"🚿 {IRRIGATION_EVENTS_ROW_LABEL}",
+            "🍃 Leaf Vapor Pressure Deficit (kPa)",
+            "🌤️ Daily Light Integral (mol m⁻² d⁻¹)",
+            "💧 Water Applied per Day (mL m⁻² d⁻¹)",
+        ],
+        columns=["Low Target", "High Target", "Min", "Average", "Max"],
+        data=np.nan,
+    )
+
+    summary_display = summary.copy().astype("object")
+    summary_numeric = summary.copy()
+
+    for idx in summary_display.index:
+        for col in summary_display.columns:
+            summary_display.at[idx, col] = "-"
+
+temp_symbol = "°F" if temp_unit == "F" else "°C"
+
+standard_summary_rows = [
+    f"🌡️ Air Temperature ({temp_symbol})",
+    f"🍂 Leaf Temperature ({temp_symbol})",
+    "💦 Relative Humidity (%)",
+    "🍃 Leaf Vapor Pressure Deficit (kPa)",
+    "💡 Light Intensity (PPFD - µmol m⁻² s⁻¹)",
+    f"🚿 {IRRIGATION_EVENTS_ROW_LABEL}",
+    "🌤️ Daily Light Integral (mol m⁻² d⁻¹)",
+    "💧 Water Applied per Day (mL m⁻² d⁻¹)",
+]
+
+summary = pd.DataFrame(
+    index=standard_summary_rows,
+    columns=["Low Target", "High Target", "Min", "Average", "Max"],
+    data=np.nan,
+)
+
+summary_display = summary.copy().astype("object")
+summary_numeric = summary.copy()
+
+for idx in summary_display.index:
+    for col in summary_display.columns:
+        summary_display.at[idx, col] = "-"
 
 if numeric_cols:
     summary = df_display[numeric_cols].agg(["min", "mean", "max"]).transpose()
@@ -2270,47 +2708,62 @@ if numeric_cols:
             else:
                 new_canon_to_raw[canon] = token_to_raw.get(str(selected_token))
 
-        db.upsert_file_column_map(
-            user["id"],
-            int(rec["id"]),
-            raw_columns=[str(c) for c in raw_cols_for_dropdown],
-            canon_to_raw=new_canon_to_raw,
-            raw_preview_rows=None,
+        # -------- 2) Save this mapping to every week from the same raw upload --------
+        sibling_file_ids = get_same_raw_upload_file_ids(
+            user_id=user["id"],
+            current_file_id=int(rec["id"]),
         )
 
-        # -------- 3) Regenerate cleaned file bytes from raw upload --------
-        raw_obj = db.get_raw_file_bytes(int(rec["id"]))
-        if raw_obj is None:
-            st.error(
-                "This file does not have raw upload bytes saved, so the cleaned file cannot be regenerated. "
-                "Re-upload the original file once to enable automatic summary-table updates."
+        raw_columns_for_save = [str(c) for c in raw_cols_for_dropdown]
+
+        # Save mapping to all sibling weeks, but do not regenerate all of them now.
+        for fid in sibling_file_ids:
+            save_mapping_to_file_only(
+                user_id=user["id"],
+                file_id=int(fid),
+                canon_to_raw=new_canon_to_raw,
+                raw_columns=raw_columns_for_save,
             )
-            st.stop()
 
-        raw_filename = raw_obj["raw_filename"]
-        ext = Path(raw_filename).suffix or ".csv"
-        df_raw2, _, _, _ = load_table_from_bytes(raw_obj["bytes"], ext)
-
-        raw_to_canon = _invert_canon_to_raw(new_canon_to_raw)
-        df_clean2 = build_clean_dataframe(df_raw2, raw_to_canon)
-        df_clean2 = apply_realistic_value_filters(
-            df_clean2,
-            orig_temp_unit=orig_temp_unit,
-            show_warnings=True,
+        # Save as user's latest mapping template for future uploads.
+        db.set_last_upload_context(
+            user["id"],
+            file_id=int(rec["id"]),
+            raw_columns=raw_columns_for_save,
+            canon_to_raw=new_canon_to_raw,
         )
 
-        required_for_dashboard = ["Time", "AirTemp", "RH"]
-        missing = [c for c in required_for_dashboard if c not in df_clean2.columns]
+        # -------- 3) Regenerate ONLY the currently selected week now --------
+        missing = regenerate_file_from_mapping_preserve_window(
+            user_id=user["id"],
+            file_id=int(rec["id"]),
+            canon_to_raw=new_canon_to_raw,
+            raw_columns=raw_columns_for_save,
+            orig_temp_unit=orig_temp_unit,
+        )
+
         if missing:
             st.warning(
-                "Table changes were not applied because the dashboard file would be missing required columns: "
+                "Mapping was saved for all weeks from this upload, but some dashboard "
+                "columns are still missing for the selected week: "
                 + ", ".join(missing)
+                + ". Select the remaining columns in the table."
             )
-            st.session_state[summary_sig_key] = current_summary_sig
-            st.stop()
+        else:
+            if len(sibling_file_ids) > 1:
+                st.toast(
+                    f"Mapping saved for {len(sibling_file_ids)} weekly files.",
+                    icon="✅",
+                )
+            else:
+                st.toast("Mapping saved.", icon="✅")
 
-        cleaned_bytes2 = df_clean2.to_csv(index=False).encode("utf-8")
-        db.update_file_content(int(rec["id"]), cleaned_bytes2)
+        # Mark sibling files so they will be refiltered/regenerated when selected.
+        if "filtered_file_unit_keys" in st.session_state:
+            for fid in sibling_file_ids:
+                st.session_state["filtered_file_unit_keys"].discard(
+                    f"{int(fid)}_{orig_temp_unit}"
+                )
 
         st.session_state[summary_sig_key] = current_summary_sig
         st.rerun()

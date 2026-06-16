@@ -19,20 +19,33 @@ DATA_DIR.mkdir(parents=True, exist_ok=True)
 
 def get_conn():
     """
-    Get a Postgres connection using the URL in st.secrets['database']['url'].
+    Get a Postgres connection from either:
+      1. Railway / environment variable: DATABASE_URL
+      2. Local Streamlit secrets: [database].url
 
-    Using RealDictCursor so rows behave like dicts (row['column']).
+    Environment variables are checked first so Railway deployment keeps working.
+    Streamlit secrets are used as a local fallback.
     """
-
-    #db_url = st.secrets["database"]["url"]
     import os
+
     db_url = os.environ.get("DATABASE_URL")
 
-    conn = psycopg2.connect(
+    if not db_url:
+        try:
+            db_url = st.secrets["database"]["url"]
+        except Exception:
+            db_url = None
+
+    if not db_url:
+        raise RuntimeError(
+            "No database URL found. Set DATABASE_URL in Railway, or add "
+            "[database]\\nurl = '...' to .streamlit/secrets.toml for local testing."
+        )
+
+    return psycopg2.connect(
         db_url,
         cursor_factory=psycopg2.extras.RealDictCursor,
     )
-    return conn
 
 
 def init_db() -> None:
